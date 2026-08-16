@@ -1,0 +1,11 @@
+__pycache__/
+.idea/
+.vs/
+.md/
+output/
+dist/
+
+*.exe
+*.bat
+
+1.txt
