@@ -23,6 +23,7 @@ TRANSLATIONS = {
         "language": "语言",
         "hotkey": "快捷键",
         "settings_title": "设置",
+        "autostart": "开机自启",
     },
     "en": {
         "screenshot": "Screenshot",
@@ -45,6 +46,7 @@ TRANSLATIONS = {
         "language": "Language",
         "hotkey": "Hotkey",
         "settings_title": "Settings",
+        "autostart": "Auto-start",
     }
 }
 

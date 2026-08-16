@@ -13,7 +13,7 @@ from modules.hotkey import WinHotkeyFilter, register_hotkey, unregister_hotkey
 from modules.capsule import CapsuleBar
 from modules.screenshot import ScreenshotOverlay
 from modules.annotation import AnnotationOverlay
-from modules.settings import SettingsDialog
+from modules.settings import SettingsDialog, apply_autostart
 
 
 def load_app_icon():
@@ -34,6 +34,9 @@ class DeskFlowApp:
 
         Config()
         I18n.get_language()
+
+        # Apply auto-start setting from config to registry
+        apply_autostart(Config().get("autostart", False))
 
         self.capsule = CapsuleBar()
         self.active_overlay = None
