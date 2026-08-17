@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, QRect, Signal
 from PySide6.QtGui import QPainter, QColor, QPen, QPixmap, QGuiApplication, QFont, QPalette
 from modules.overlay import BaseOverlay
 from modules.i18n import I18n
+from datetime import datetime
 
 
 def _selection_color():
@@ -204,8 +205,9 @@ class ScreenshotPreview(QDialog):
         )
 
     def save_image(self):
+        default_name = f"{I18n.tr('screenshot')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         path, _ = QFileDialog.getSaveFileName(
-            self, I18n.tr("save_as"), "",
+            self, I18n.tr("save_as"), default_name,
             f"{I18n.tr('png_files')} (*.png)"
         )
         if path:
