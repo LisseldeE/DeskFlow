@@ -41,6 +41,15 @@ ICON_TEXT = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill=
   <line x1="8" y1="20" x2="16" y2="20"/>
 </svg>"""
 
+ICON_TRANSLATE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="m5 8 6 6"/>
+  <path d="m4 14 6-6 2-3"/>
+  <path d="M2 5h12"/>
+  <path d="M7 2h1"/>
+  <path d="m22 22-5-10-5 10"/>
+  <path d="M14 18h6"/>
+</svg>"""
+
 # --- Clipboard feature icons ---
 
 ICON_CLIPBOARD = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -88,6 +97,7 @@ def icon_svg(name):
         "rectangle": ICON_RECTANGLE,
         "freeform": ICON_FREEFORM,
         "text": ICON_TEXT,
+        "translate": ICON_TRANSLATE,
         "clipboard": ICON_CLIPBOARD,
         "copy": ICON_COPY,
         "trash": ICON_TRASH,

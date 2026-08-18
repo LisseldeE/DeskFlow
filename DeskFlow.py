@@ -13,6 +13,7 @@ from modules.hotkey import WinHotkeyFilter, register_hotkey, unregister_hotkey
 from modules.capsule import CapsuleBar
 from modules.screenshot import ScreenshotOverlay
 from modules.annotation import AnnotationOverlay
+from modules.translate import TranslateOverlay
 from modules.settings import SettingsDialog, apply_autostart
 from modules.clipboard_manager import ClipboardManager
 
@@ -87,6 +88,7 @@ class DeskFlowApp:
     def connect_signals(self):
         self.capsule.btn_screenshot.clicked.connect(self._on_screenshot)
         self.capsule.btn_annotation.clicked.connect(self._on_annotation)
+        self.capsule.btn_translate.clicked.connect(self._on_translate)
         self.capsule.btn_settings.clicked.connect(self._on_settings)
         self.capsule.btn_close.clicked.connect(self._on_close)
         # Clipboard: left-click toggles on/off, right-click opens room config.
@@ -132,6 +134,15 @@ class DeskFlowApp:
         self.active_overlay = overlay
         overlay.closed.connect(lambda o=overlay: self._on_overlay_closed(o))
         overlay.finished.connect(lambda o=overlay: self._on_overlay_closed(o))
+
+    def _on_translate(self):
+        # Same rationale as _on_screenshot: hide the whole family instantly
+        # so neither the capsule nor the clipboard card leaks into the
+        # translated selection.
+        self.clipboard_mgr.hide_family_immediately()
+        overlay = TranslateOverlay()
+        self.active_overlay = overlay
+        overlay.closed.connect(lambda o=overlay: self._on_overlay_closed(o))
 
     def _on_settings(self):
         dialog = SettingsDialog()

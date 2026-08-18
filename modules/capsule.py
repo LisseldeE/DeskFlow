@@ -12,7 +12,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtSvg import QSvgRenderer
 from modules.icons import (
-    ICON_SCREENSHOT, ICON_ANNOTATION, ICON_SETTINGS, ICON_CLOSE, ICON_CLIPBOARD
+    ICON_SCREENSHOT, ICON_ANNOTATION, ICON_TRANSLATE, ICON_SETTINGS,
+    ICON_CLOSE, ICON_CLIPBOARD
 )
 from modules.i18n import I18n
 from modules.family import FamilyWindowRegistry
@@ -177,7 +178,7 @@ class CapsuleBar(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         # Never steal focus on show — the user's caret stays in their input.
         self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setFixedSize(300, 56)
+        self.setFixedSize(342, 56)
 
         self._animating = False
         self._pending_hide = False
@@ -215,6 +216,10 @@ class CapsuleBar(QWidget):
         self.btn_annotation = AnimatedIconButton(
             ICON_ANNOTATION, I18n.tr("annotation"))
         layout.addWidget(self.btn_annotation)
+
+        self.btn_translate = AnimatedIconButton(
+            ICON_TRANSLATE, I18n.tr("translate"))
+        layout.addWidget(self.btn_translate)
 
         self.btn_clipboard = AnimatedIconButton(
             ICON_CLIPBOARD, I18n.tr("clipboard"))

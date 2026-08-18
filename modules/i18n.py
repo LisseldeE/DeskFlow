@@ -50,6 +50,13 @@ TRANSLATIONS = {
         "clipboard_enable": "开启剪切板",
         "clipboard_disable": "关闭剪切板",
         "clipboard_copied": "已复制",
+        # Translate feature
+        "translate_loading": "识别翻译中…",
+        "translate_retry": "重试",
+        "translate_no_text": "未识别到文字",
+        "translate_failed": "翻译失败",
+        "copied": "已复制",
+        "translate_target_lang": "目标语言",
     },
     "en": {
         "screenshot": "Screenshot",
@@ -99,6 +106,13 @@ TRANSLATIONS = {
         "clipboard_enable": "Enable clipboard",
         "clipboard_disable": "Disable clipboard",
         "clipboard_copied": "Copied",
+        # Translate feature
+        "translate_loading": "Recognizing & translating…",
+        "translate_retry": "Retry",
+        "translate_no_text": "No text recognized",
+        "translate_failed": "Translation failed",
+        "copied": "Copied",
+        "translate_target_lang": "Target language",
     }
 }
 

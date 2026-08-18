@@ -37,7 +37,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(I18n.tr("settings_title"))
-        self.setFixedSize(320, 240)
+        self.setFixedSize(320, 360)
         self.setWindowFlags(
             Qt.Dialog | Qt.WindowCloseButtonHint | Qt.WindowStaysOnTopHint
         )
@@ -86,6 +86,23 @@ class SettingsDialog(QDialog):
         autostart_layout.addStretch()
         layout.addLayout(autostart_layout)
 
+        # Translate target language
+        translate_lang_layout = QHBoxLayout()
+        translate_lang_label = QLabel(I18n.tr("translate_target_lang"))
+        translate_lang_label.setFixedWidth(80)
+        translate_lang_layout.addWidget(translate_lang_label)
+
+        self.translate_lang_combo = QComboBox()
+        self.translate_lang_combo.addItem("简体中文", "zh-CN")
+        self.translate_lang_combo.addItem("繁體中文", "zh-TW")
+        self.translate_lang_combo.addItem("English", "en")
+        self.translate_lang_combo.addItem("日本語", "ja")
+        self.translate_lang_combo.addItem("한국어", "ko")
+        self.translate_lang_combo.setFixedWidth(160)
+        translate_lang_layout.addWidget(self.translate_lang_combo)
+        translate_lang_layout.addStretch()
+        layout.addLayout(translate_lang_layout)
+
         layout.addStretch()
 
         # Close button
@@ -107,6 +124,11 @@ class SettingsDialog(QDialog):
         autostart = config.get("autostart", False)
         self.autostart_check.setChecked(autostart)
 
+        translate_lang = config.get("translate_target_lang", "zh-CN")
+        index = self.translate_lang_combo.findData(translate_lang)
+        if index >= 0:
+            self.translate_lang_combo.setCurrentIndex(index)
+
     def accept(self):
         lang = self.lang_combo.currentData()
         I18n.set_language(lang)
@@ -114,6 +136,8 @@ class SettingsDialog(QDialog):
         autostart = self.autostart_check.isChecked()
         Config().set("autostart", autostart)
         apply_autostart(autostart)
+
+        Config().set("translate_target_lang", self.translate_lang_combo.currentData())
 
         super().accept()
 

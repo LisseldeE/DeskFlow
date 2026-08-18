@@ -8,7 +8,7 @@
 
 ## Project Introduction
 
-DeskFlow is a PySide6-based Windows desktop quick toolbar. Use the global hotkey `Ctrl + `` to summon a floating capsule, providing quick access to screenshot, translation, annotation, LAN clipboard sync, and other daily office tools at your fingertips.
+DeskFlow is a PySide6-based Windows desktop quick toolbar. Use the global hotkey <kbd>Ctrl</kbd> + <kbd>·</kbd> to summon a floating capsule, providing quick access to screenshot, translation, annotation, LAN clipboard sync, and other daily office tools at your fingertips.
 
 ## Project Information
 
@@ -20,7 +20,7 @@ DeskFlow is a PySide6-based Windows desktop quick toolbar. Use the global hotkey
 ## Usage
 
 ### Quick Actions
-- **Global Hotkey**: `Ctrl + `` to show/hide the floating capsule panel
+- **Global Hotkey**: <kbd>Ctrl</kbd> + <kbd>·</kbd> to show/hide the floating capsule panel
 - **Screenshot Tool**: Quickly capture screen regions with preview, save, and copy support
 - **Annotation Tool**: Annotate screenshots with rectangles, freeform shapes, and text
 - **LAN Clipboard**: Real-time text clipboard sync across devices with the same room code
