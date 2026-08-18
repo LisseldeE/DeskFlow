@@ -18,8 +18,19 @@ from modules.clipboard_manager import ClipboardManager
 
 
 def load_app_icon():
-    """Load icon.ico from the app directory"""
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
+    """Load icon.ico from the app directory.
+
+    Handles both dev (python DeskFlow.py) and PyInstaller onefile builds.
+    In a onefile build, sys._MEIPASS points to the temp extraction directory
+    where --add-data placed icon.ico. In dev mode, __file__'s directory is
+    the project root. Fall back to the exe directory as a last resort."""
+    icon_path = None
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        icon_path = os.path.join(sys._MEIPASS, "icon.ico")
+    if not icon_path or not os.path.exists(icon_path):
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
+    if not os.path.exists(icon_path):
+        icon_path = os.path.join(os.path.dirname(sys.executable), "icon.ico")
     if os.path.exists(icon_path):
         return QIcon(icon_path)
     return QIcon()
@@ -102,15 +113,21 @@ class DeskFlowApp:
     def _on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.DoubleClick:
             self.toggle_capsule()
-
+            
     def _on_screenshot(self):
-        self.capsule.hide_immediately()
+        # Hide the whole family (capsule + clipboard panel) instantly so
+        # neither is captured in the screenshot. hide_family_immediately
+        # doesn't touch _expanded or save_state — the panel preference is
+        # preserved and the family resurfaces on the next Ctrl+`.
+        self.clipboard_mgr.hide_family_immediately()
         overlay = ScreenshotOverlay()
         self.active_overlay = overlay
         overlay.closed.connect(lambda o=overlay: self._on_overlay_closed(o))
 
     def _on_annotation(self):
-        self.capsule.hide_immediately()
+        # Same rationale as _on_screenshot: don't let family UI leak into
+        # the annotation overlay's screen capture.
+        self.clipboard_mgr.hide_family_immediately()
         overlay = AnnotationOverlay()
         self.active_overlay = overlay
         overlay.closed.connect(lambda o=overlay: self._on_overlay_closed(o))

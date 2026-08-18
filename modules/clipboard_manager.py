@@ -12,14 +12,17 @@ the host (start a TCP server + UDP discovery responder).
 import socket
 import uuid
 
-from PySide6.QtCore import QObject, Signal, QPoint
+from PySide6.QtCore import QObject, Signal, QTimer
+
+from modules.keystroke import send_ctrl_v
 
 from modules.config import Config
 from modules.i18n import I18n
 from modules.clipboard_history import ClipboardHistory
 from modules.clipboard_monitor import ClipboardMonitor
 from modules.clipboard_network import (
-    RoomDiscovery, RoomResponder, ClipboardHost, ClipboardClient
+    RoomDiscovery, RoomResponder, ClipboardHost, ClipboardClient,
+    SubnetTCPProbe, _get_local_ip
 )
 from modules.clipboard_panel import ClipboardPanel
 from modules.room_config import RoomConfigDialog
@@ -38,6 +41,7 @@ class ClipboardManager(QObject):
 
         # Network components (created on enable)
         self._discovery = None
+        self._tcp_probe = None
         self._responder = None
         self._host = None
         self._client = None
@@ -53,6 +57,16 @@ class ClipboardManager(QObject):
         self._connecting = False
         self._peer_count = 0
         self._status = ""
+        # Host-conflict scan (reliable fallback when competitor detection fails)
+        self._conflict_discovery = None
+        self._conflict_tcp_probe = None
+        self._scanning_for_conflict = False
+        # Initial discovery coordination: UDP discovery + TCP probe run in
+        # parallel; the first to find a matching host wins, and if both come
+        # back empty we become host. _connect_resolved guards against late
+        # callbacks acting after a decision (or after _stop_network).
+        self._connect_resolved = False
+        self._connect_pending = 0
         # Last text emitted by the local monitor — collapses burst writes (some
         # apps set the clipboard text/html/inline several times in a row).
         self._last_local_text = None
@@ -61,7 +75,6 @@ class ClipboardManager(QObject):
         self._panel.copy_requested.connect(self._on_panel_copy)
         self._panel.delete_requested.connect(self._on_panel_delete)
         self._panel.clear_requested.connect(self._on_panel_clear)
-        self._panel.position_changed.connect(self._on_panel_moved)
         self._panel.collapse_requested.connect(self.hide_card)
 
         # --- Wire monitor ---
@@ -93,21 +106,39 @@ class ClipboardManager(QObject):
     def _restore_from_config(self):
         cfg = Config()
         room = cfg.get("clipboard_room", "") or ""
+        # Migrate the legacy "clipboard_room_code" key (an earlier schema
+        # name) if the current key is empty. Either way, drop the legacy
+        # key so config.json stops carrying both fields.
+        if not room:
+            legacy = cfg.get("clipboard_room_code", "") or ""
+            if self._is_valid_room(legacy):
+                room = legacy
+                cfg.set("clipboard_room", room)
+        # Always remove the legacy key (even if empty/None) so it's gone.
+        if "clipboard_room_code" in cfg._config:
+            del cfg._config["clipboard_room_code"]
+            cfg.save()
+
         enabled = bool(cfg.get("clipboard_enabled", False))
         expanded = bool(cfg.get("clipboard_expanded", False))
-        pos = cfg.get("clipboard_pos", None)
-        if isinstance(pos, list) and len(pos) == 2:
-            self._panel.set_initial_pos(QPoint(int(pos[0]), int(pos[1])))
+        # The panel is no longer draggable and always positions next to the
+        # cursor on show, so the persisted clipboard_pos is obsolete. Drop
+        # it from existing configs to avoid carrying dead state.
+        if "clipboard_pos" in cfg._config:
+            del cfg._config["clipboard_pos"]
+            cfg.save()
 
         if enabled and self._is_valid_room(room):
+            # Set _expanded BEFORE _enable() — _enable() calls _save_state(),
+            # which would otherwise persist the init-default False and
+            # clobber the user's stored preference.
+            self._expanded = bool(expanded)
             self._enable(room)  # network + monitor on, no UI
-            # Persist the user's panel preference but DON'T auto-pop the card
-            # on startup. Restarting with a floating panel and no capsule (the
-            # previous behavior) felt broken — and the panel couldn't detect
-            # focus loss without the capsule's poll running. Instead, the
+            # DON'T auto-pop the card on startup. Restarting with a floating
+            # panel and no capsule felt broken — and the panel couldn't
+            # detect focus loss without the capsule running. Instead, the
             # panel surfaces together with the capsule when the user presses
             # Ctrl+`, gated by _expanded.
-            self._expanded = bool(expanded)
         self._update_button_tooltip()
         self._refresh_status_text()
 
@@ -121,31 +152,37 @@ class ClipboardManager(QObject):
     # ------------------------------------------------------------------ button
 
     def on_button_left(self):
-        """Three-state cycle (per PRD):
-            A. disabled           -> enable + expand panel   (needs a room)
-            B. enabled + expanded -> collapse panel (stay enabled)
-            C. enabled + collapsed-> disable
-        Left-click NEVER opens the room config when a room is already
-        configured — config is right-click only. First-time setup (no room)
-        still opens the config since there's nothing to enable."""
+        """Left-click cycle (revised two-state model):
+            A. disabled (any panel state) -> enable + expand panel
+            B. enabled + expanded         -> disable (stop sync, hide panel)
+            C. enabled + collapsed         -> expand panel (back to B)
+
+        State C is only reached via the panel's collapse ("-") button, NOT
+        via left-click on the capsule button. So a left-click on an enabled
+        family is unambiguous:
+          - panel expanded (B) -> turn the whole feature off
+          - panel collapsed (C) -> re-expand
+
+        First-time setup (no room configured): left-click opens the room
+        config dialog (right-click also does this) — there's nothing to
+        enable yet."""
         if not self._enabled:
-            # A -> B
+            # A -> B: enable + expand. Needs a room.
             if not self._is_valid_room(self._room_code):
-                # No room yet: must configure once before the feature can run.
                 self._open_room_config(initial=self._room_code)
                 return
             self._enable(self._room_code)
             self.show_card()
             return
-        # enabled: toggle on the logical _expanded flag (NOT panel.isVisible(),
-        # which stays True during the 300ms collapse animation and would send
-        # a rapid second click back into the collapse branch instead of disable).
+        # Enabled: branch on _expanded (the logical panel-preference flag,
+        # NOT panel.isVisible() — that stays True during the 300ms collapse
+        # animation and would misclassify a fast double-click).
         if self._expanded:
-            # B -> C: collapse the card, keep the network running
-            self.hide_card()
-        else:
-            # C -> A: turn the feature off
+            # B -> A: turn the feature off, hide panel, stop sync.
             self.disable()
+        else:
+            # C -> B: re-expand the panel (the feature stays enabled).
+            self.show_card()
 
     def on_button_right(self):
         """Right-click: change (or set) the room code. The only path that
@@ -196,29 +233,186 @@ class ClipboardManager(QObject):
     # ------------------------------------------------------------------ network
 
     def _start_connection(self, room_code):
+        """Discover an existing host for the room and join it, or become the
+        host if none is found. Runs TWO discovery mechanisms in parallel and
+        takes the first hit:
+
+          * UDP broadcast discovery (RoomDiscovery) — fast when broadcast
+            delivery works;
+          * TCP subnet probe (SubnetTCPProbe) — reliable directed-connection
+            scan that finds hosts UDP misses (Windows UDP broadcast is
+            unreliable; this is the path that actually resolves on real Wi-Fi
+            LANs where the user observed both devices becoming hosts).
+
+        If either finds a matching host, we become a client. If both come
+        back empty, we become the host ourselves.
+        """
         self._connecting = True
+        self._connect_resolved = False
+        self._connect_pending = 2
         self._set_status(I18n.tr("clipboard_status_scanning"))
+
         self._discovery = RoomDiscovery(self)
-        self._discovery.discovery_finished.connect(self._on_discovery_finished)
-        self._discovery.error.connect(self._on_discovery_error)
+        self._discovery.discovery_finished.connect(self._on_initial_discovery_part)
+        self._discovery.error.connect(self._on_initial_part_error)
         self._discovery.discover(room_code)
 
-    def _on_discovery_finished(self, rooms):
-        self._connecting = False
-        if not self._enabled:
-            return
-        match = None
+        self._tcp_probe = SubnetTCPProbe(self)
+        self._tcp_probe.probe_finished.connect(self._on_initial_discovery_part)
+        self._tcp_probe.error.connect(self._on_initial_part_error)
+        self._tcp_probe.probe(room_code, timeout=5.0)
+
+    @staticmethod
+    def _match_room(rooms, room_code):
         for ip, rc, port in rooms:
-            if rc == self._room_code:
-                match = (ip, port)
-                break
+            if rc == room_code:
+                return (ip, port)
+        return None
+
+    def _on_initial_discovery_part(self, rooms):
+        if not self._enabled or self._connect_resolved:
+            return
+        match = self._match_room(rooms, self._room_code)
         if match:
+            self._connect_resolved = True
+            self._connecting = False
+            self._cancel_initial_discovery()
             self._become_client(match[0], match[1])
-        else:
+            return
+        # No match from this mechanism — wait for the other, or become host
+        # if both are done.
+        self._connect_pending -= 1
+        if self._connect_pending <= 0:
+            self._connect_resolved = True
+            self._connecting = False
             self._become_host()
 
-    def _on_discovery_error(self, msg):
-        self._set_status(I18n.tr("clipboard_status_failed"))
+    def _on_initial_part_error(self, msg):
+        if not self._enabled or self._connect_resolved:
+            return
+        self._connect_pending -= 1
+        if self._connect_pending <= 0:
+            # Both mechanisms failed/empty — become host (the conflict scan
+            # will reconcile if another host is actually out there).
+            self._connect_resolved = True
+            self._connecting = False
+            self._become_host()
+
+    def _cancel_initial_discovery(self):
+        if self._discovery:
+            self._discovery.stop()
+            self._discovery = None
+        if self._tcp_probe:
+            self._tcp_probe.stop()
+            self._tcp_probe = None
+
+    # ------------------------------------------------------------------ host conflict resolution
+
+    def _schedule_host_conflict_scan(self):
+        """Schedule a periodic host-conflict scan. After becoming a host,
+        we periodically re-scan the LAN to check for other hosts running
+        the same room. If another host is found, the IP tiebreaker
+        determines who keeps the host role and who steps down.
+
+        This is the reliable fallback for the simultaneous-startup race
+        condition: if both devices start at the same time, both scan
+        during the same 3s window (no responder running yet), both
+        become hosts. The conflict scan 2s later finds the other host
+        and resolves via IP tiebreaker.
+
+        The scan itself uses repeated broadcasts (every 500ms during the
+        3s window) so even on lossy Windows UDP, at least one of the
+        6 broadcasts should get through."""
+        QTimer.singleShot(2000, self._do_host_conflict_scan)
+
+    def _do_host_conflict_scan(self):
+        if self._scanning_for_conflict or self._role != "host" or not self._enabled:
+            return
+        self._scanning_for_conflict = True
+        self._conflict_rooms = []
+        self._conflict_pending = 2  # UDP discovery + TCP probe
+
+        # UDP discovery (finds hosts whose responder receives broadcast).
+        self._conflict_discovery = RoomDiscovery(self)
+        self._conflict_discovery.discovery_finished.connect(
+            self._on_conflict_scan_part
+        )
+        self._conflict_discovery.error.connect(self._on_conflict_scan_part_error)
+        # NOTE: discover() emits `error` synchronously on start failure
+        # (same-thread AutoConnection = Direct), which already drives
+        # _on_conflict_scan_part_error — no extra bookkeeping needed here.
+        if not self._conflict_discovery.discover(self._room_code, timeout=3.0):
+            self._conflict_discovery = None
+
+        # TCP subnet probe (reliable — finds hosts UDP misses; this is the
+        # path that resolves the both-become-hosts case on real Wi-Fi LANs).
+        self._conflict_tcp_probe = SubnetTCPProbe(self)
+        self._conflict_tcp_probe.probe_finished.connect(self._on_conflict_scan_part)
+        self._conflict_tcp_probe.error.connect(self._on_conflict_scan_part_error)
+        if not self._conflict_tcp_probe.probe(self._room_code, timeout=5.0):
+            self._conflict_tcp_probe = None
+
+    def _on_conflict_scan_part(self, rooms):
+        # Collect results from each mechanism; evaluate once both are done.
+        self._conflict_rooms.extend(rooms)
+        self._conflict_pending -= 1
+        if self._conflict_pending > 0:
+            return
+        self._evaluate_conflict_scan()
+
+    def _on_conflict_scan_part_error(self, msg):
+        self._conflict_pending -= 1
+        if self._conflict_pending > 0:
+            return
+        self._evaluate_conflict_scan()
+
+    def _evaluate_conflict_scan(self):
+        self._scanning_for_conflict = False
+        self._conflict_discovery = None
+        self._conflict_tcp_probe = None
+        if not self._enabled or self._role != "host":
+            return
+        local_ip = _get_local_ip()
+        for ip, rc, port in self._conflict_rooms:
+            if rc == self._room_code and ip != local_ip and ip != "127.0.0.1":
+                # Another host found for the same room. Use IP tiebreaker.
+                all_ips = sorted([local_ip, ip])
+                if local_ip != all_ips[0]:
+                    # We have the higher IP — step down and join the other host.
+                    self._resolve_host_conflict(ip, port)
+                # If we have the lower IP, we keep being the host.
+                # The other device's conflict scan will detect us and step down.
+                return
+        # No conflict found, schedule next scan.
+        self._schedule_host_conflict_scan()
+
+    def _on_conflict_scan_error(self, msg):
+        # Legacy hook kept for any external caller; the part-error handler
+        # above now drives the merged evaluation.
+        self._scanning_for_conflict = False
+        if self._enabled and self._role == "host":
+            self._schedule_host_conflict_scan()
+
+    def _resolve_host_conflict(self, other_host_ip, other_host_port):
+        """Step down as host and join the other host as a client."""
+        # Stop the conflict scan first to avoid re-entrance.
+        self._scanning_for_conflict = False
+        if self._conflict_discovery:
+            self._conflict_discovery.stop()
+            self._conflict_discovery = None
+        if self._conflict_tcp_probe:
+            self._conflict_tcp_probe.stop()
+            self._conflict_tcp_probe = None
+        # Stop host and responder, then join the other host.
+        if self._responder:
+            self._responder.stop()
+            self._responder = None
+        if self._host:
+            self._host.stop()
+            self._host = None
+        self._role = None
+        if self._enabled:
+            self._become_client(other_host_ip, other_host_port)
 
     def _become_host(self):
         self._host = ClipboardHost(self)
@@ -228,10 +422,16 @@ class ClipboardManager(QObject):
         if not self._host.start():
             self._set_status(I18n.tr("clipboard_status_failed"))
             return
+        # Expose the room code so the host can answer SubnetTCPProbe "probe"
+        # messages (probe_resp carries the room for verification by the prober).
+        self._host.room_code = self._room_code
         self._responder = RoomResponder(self)
         self._responder.start(self._room_code, self._host.port)
         self._role = "host"
         self._refresh_status_text()
+        # Start periodic conflict scan to detect other hosts (fallback when
+        # competitor detection during initial discovery fails).
+        self._schedule_host_conflict_scan()
 
     def _become_client(self, host_ip, port):
         self._client = ClipboardClient(self)
@@ -242,6 +442,7 @@ class ClipboardManager(QObject):
         self._client.peer_count_changed.connect(self._on_peer_count)
         self._client.connected.connect(self._on_client_connected)
         self._client.disconnected.connect(self._on_client_disconnected)
+        self._client.reconnecting.connect(self._on_client_reconnecting)
         self._client.error.connect(self._on_network_error)
         self._client.connect_to_host(
             host_ip, port, self._room_code, self._peer_id, self._peer_name
@@ -257,6 +458,14 @@ class ClipboardManager(QObject):
     def _on_client_connected(self):
         self._set_status(I18n.tr("clipboard_status_joined"))
 
+    def _on_client_reconnecting(self):
+        # Emitted by the client between retry attempts (initial connect
+        # failure or a dropped connection). Show "connecting..." rather
+        # than "disconnected" — we're still trying, not terminal.
+        if not self._enabled:
+            return
+        self._set_status(I18n.tr("clipboard_status_connecting"))
+
     def _on_client_disconnected(self):
         if not self._enabled:
             return
@@ -270,9 +479,23 @@ class ClipboardManager(QObject):
         self._refresh_status_text()
 
     def _stop_network(self):
+        # Mark initial-discovery resolved so any late callback from a still-
+        # running UDP/TCP discovery is ignored instead of becoming host/client.
+        self._connect_resolved = True
+        self._connect_pending = 0
+        self._scanning_for_conflict = False
+        if self._conflict_discovery:
+            self._conflict_discovery.stop()
+            self._conflict_discovery = None
+        if self._conflict_tcp_probe:
+            self._conflict_tcp_probe.stop()
+            self._conflict_tcp_probe = None
         if self._discovery:
             self._discovery.stop()
             self._discovery = None
+        if self._tcp_probe:
+            self._tcp_probe.stop()
+            self._tcp_probe = None
         if self._responder:
             self._responder.stop()
             self._responder = None
@@ -307,16 +530,38 @@ class ClipboardManager(QObject):
         self._refresh_panel()
 
     def _on_panel_copy(self, content):
-        """User clicked a history item -> make it the active clipboard locally
-        and on every peer, bumping it to the top of history. The panel does
-        NOT steal focus (WS_EX_NOACTIVATE), so the user's caret stays in their
-        input field and Ctrl+V pastes at the cursor. The panel stays open so
-        the user can copy several items; it collapses when focus moves to a
-        non-anchor window (detected by the capsule's _poll_check)."""
+        """User clicked a history item -> paste it at the user's caret,
+        then collapse the family.
+
+        Sequence:
+          1. Write the content to the system clipboard (echo-guarded so
+             this doesn't re-broadcast to peers — peers already have it,
+             or will receive it via _broadcast below).
+          2. Bump it to the top of history + broadcast to peers.
+          3. After 50ms (let QClipboard settle), synthesize Ctrl+V via
+             SendInput. The panel never steals focus (WS_EX_NOACTIVATE),
+             so the foreground window is still the user's original input
+             field — the paste lands at their caret.
+          4. After another 100ms (SendInput is synchronous, but the target
+             app needs a tick to process the keystroke), collapse the
+             family. This avoids the panel obscuring whatever just got
+             pasted, and matches the "click → paste → done" expectation.
+
+        Timings are tuned for Windows: SendInput returns after the OS has
+        queued the events, but the receiving app processes them on its own
+        message pump — a short grace period prevents the panel's hide
+        animation from racing the paste."""
         self._monitor.set_clipboard(content)
         self._history.add(content, source="local", origin_peer=self._peer_id)
         self._refresh_panel()
         self._broadcast(content)
+        # Step 3: synthesize the paste.
+        QTimer.singleShot(50, send_ctrl_v)
+        # Step 4: collapse the family. hide_family() is animation-aware
+        # (reversible show/hide) and does NOT touch _expanded, so the
+        # next Ctrl+` surfaces the family with the panel still open per
+        # the user's preference.
+        QTimer.singleShot(150, self.hide_family)
 
     def _on_panel_delete(self, item_id):
         self._history.delete(item_id)
@@ -325,9 +570,6 @@ class ClipboardManager(QObject):
     def _on_panel_clear(self):
         self._history.clear()
         self._refresh_panel()
-
-    def _on_panel_moved(self, x, y):
-        Config().set("clipboard_pos", [int(x), int(y)])
 
     def _broadcast(self, text):
         if not self._enabled or not text:
@@ -365,6 +607,19 @@ class ClipboardManager(QObject):
             self.capsule.hide_capsule()
         if self._panel.isVisible():
             self._panel.hide_panel()
+
+    def hide_family_immediately(self):
+        """Hide the whole family instantly — no animation. Used when entering
+        screenshot/annotation overlays: any lingering panel would be captured
+        into the screenshot, so we want it gone the same frame. Like
+        hide_family(), this does NOT touch _expanded or save_state — the
+        user's panel preference is preserved, and the family will resurface
+        (with or without the panel per _expanded) on the next Ctrl+`."""
+        self.capsule.hide_immediately()
+        # _panel may be visible OR mid-animation; hide_immediately() handles
+        # both. Guard against the panel never having been shown (no HWND yet).
+        if self._panel.isVisible() or self._panel._animating:
+            self._panel.hide_immediately()
 
     def _hide_family(self):
         # Called when focus leaves the family (capsule or panel detected it).

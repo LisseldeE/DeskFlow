@@ -13,13 +13,15 @@ from PySide6.QtWidgets import (
     QScrollArea, QApplication, QSizePolicy
 )
 from PySide6.QtCore import (
-    Qt, Signal, QPoint, QSize, QPropertyAnimation, QEasingCurve, QTimer
+    Qt, Signal, QPoint, QSize, QPropertyAnimation, QEasingCurve, QTimer,
+    QEvent
 )
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QPalette, QCursor, QGuiApplication, QMouseEvent
+    QPainter, QColor, QPen, QPalette, QCursor, QGuiApplication, QMouseEvent,
+    QWheelEvent
 )
 
-from modules.icons import ICON_CLIPBOARD, ICON_COPY, ICON_TRASH, ICON_CLOSE
+from modules.icons import ICON_CLIPBOARD, ICON_COPY, ICON_TRASH, ICON_MINUS
 from modules.i18n import I18n
 from modules.family import FamilyWindowRegistry
 
@@ -42,6 +44,89 @@ def _make_text_icon(svg, color, size=16):
 def _system_color(role):
     c = QApplication.palette().color(role)
     return f"#{c.red():02x}{c.green():02x}{c.blue():02x}"
+
+
+# Pixel height of one item row + its spacing. Kept in sync with
+# ClipboardItemWidget.setFixedHeight(56) + list_layout.setSpacing(4) = 60.
+# Used by SmoothScrollArea to scroll one item per wheel notch instead of
+# the default viewport-height page step (which feels like "page flipping").
+_ITEM_ROW_H = 60
+
+
+class SmoothScrollArea(QScrollArea):
+    """QScrollArea whose mouse-wheel scroll is per-item AND animated.
+
+    The default QScrollArea wheel behavior scrolls by pageStep (~viewport
+    height ≈ 6 items per notch) with no animation — that feels like "page
+    flipping" and is visually jarring. We override wheelEvent so each wheel
+    notch advances one item row (60px) via a QPropertyAnimation (250ms
+    OutCubic), giving the "fixed-height panel, smooth per-item scroll" UX.
+
+    Consecutive wheel notches accumulate: if a second notch arrives mid-
+    animation, we stop the current animation and start a new one from the
+    current scroll value to the new target — no jumps, no lost deltas.
+
+    Keyboard / scrollbar-button navigation uses the same single-item step
+    via setSingleStep in _init_ui."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._scroll_anim = QPropertyAnimation(self.verticalScrollBar(), b"value")
+        self._scroll_anim.setDuration(250)
+        self._scroll_anim.setEasingCurve(QEasingCurve.OutCubic)
+        # Pending target in pixels. Wheel notches that arrive mid-animation
+        # accumulate here, so a fast scroll-wheel flick still travels the
+        # full intended distance.
+        self._pending_target = None
+
+    def wheelEvent(self, event: QWheelEvent):
+        # angleDelta.y() returns eighths of a degree; one wheel notch = 120.
+        # Many mice/touchpads deliver smaller deltas — preserve sub-notch
+        # precision by scaling proportionally instead of flooring.
+        delta_y = event.angleDelta().y()
+        if delta_y == 0:
+            return super().wheelEvent(event)
+        # Each 120-unit notch = one item row. Sub-notch deltas scale linearly.
+        steps = delta_y / 120 * _ITEM_ROW_H
+        sb = self.verticalScrollBar()
+        # Determine the starting value for the new animation:
+        #   - If an animation is running, continue from its target so the
+        #     user feels accumulation, not a sudden snap-back to the
+        #     animation's current pixel position.
+        #   - Otherwise start from the current scroll value.
+        if self._scroll_anim.state() == QPropertyAnimation.Running and \
+                self._pending_target is not None:
+            base = self._pending_target
+        else:
+            base = sb.value()
+        # Negative delta scrolls down (toward newer items at bottom of
+        # history); we want wheel-down to move the view DOWN, so subtract.
+        target = base - steps
+        # Clamp to valid range; QScrollBar clamps too, but pre-clamping
+        # here means the animation doesn't try to animate past the ends.
+        target = max(sb.minimum(), min(sb.maximum(), target))
+        self._pending_target = target
+        # Restart the animation from the current value to the new target.
+        # QPropertyAnimation.stop() is safe mid-run; the new startValue is
+        # the actual current scroll position, so there's no visual jump.
+        self._scroll_anim.stop()
+        self._scroll_anim.setStartValue(sb.value())
+        self._scroll_anim.setEndValue(target)
+        self._scroll_anim.start()
+        event.accept()
+
+    def viewportEvent(self, event):
+        # Let the base class do its scroll-bar range update first…
+        result = super().viewportEvent(event)
+        # …then force our per-item steps back. QAbstractScrollArea resets
+        # pageStep to viewport height inside its viewportEvent handler; we
+        # undo that so PageUp/PageDown also advances one item row.
+        sb = self.verticalScrollBar()
+        if sb.singleStep() != _ITEM_ROW_H:
+            sb.setSingleStep(_ITEM_ROW_H)
+        if sb.pageStep() != _ITEM_ROW_H:
+            sb.setPageStep(_ITEM_ROW_H)
+        return result
 
 
 class ClipboardItemWidget(QWidget):
@@ -116,14 +201,16 @@ class ClipboardItemWidget(QWidget):
 
 
 class PanelHeader(QWidget):
-    """Draggable header: title + status + clear + close."""
+    """Panel header: title + status + clear + close.
 
-    moved = Signal(QPoint)  # new global pos
+    The panel is NOT draggable — it always appears next to the current
+    cursor position (see ClipboardPanel._place_near_cursor). Removing the
+    drag handler also removes the "drop position" error path the user ran
+    into after a drag."""
 
     def __init__(self, parent_panel):
         super().__init__(parent_panel)
         self._panel = parent_panel
-        self._drag_offset = None
         self.setFixedHeight(40)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet("""
@@ -167,57 +254,45 @@ class PanelHeader(QWidget):
         clear_btn.clicked.connect(parent_panel.clear_requested)
         lay.addWidget(clear_btn)
 
-        close_btn = QPushButton()
-        close_btn.setFixedSize(26, 26)
-        close_btn.setCursor(Qt.PointingHandCursor)
-        close_btn.setIcon(_make_text_icon(ICON_CLOSE, _system_color(QPalette.WindowText), 14))
-        close_btn.setIconSize(QSize(14, 14))
-        close_btn.setStyleSheet("""
+        # Collapse button: "-" icon (was "X"). The button collapses the panel
+        # card only — it does NOT disable the clipboard feature. That's an
+        # intentional distinction from the capsule button's left-click
+        # (which DOES disable when expanded). Hover stays neutral (no red),
+        # since this is a "minimize" action, not a destructive one.
+        collapse_btn = QPushButton()
+        collapse_btn.setFixedSize(26, 26)
+        collapse_btn.setCursor(Qt.PointingHandCursor)
+        collapse_btn.setIcon(_make_text_icon(ICON_MINUS, _system_color(QPalette.WindowText), 14))
+        collapse_btn.setIconSize(QSize(14, 14))
+        collapse_btn.setStyleSheet("""
             QPushButton { background: transparent; border: none; border-radius: 6px; }
-            QPushButton:hover { background-color: rgba(224, 49, 49, 60); }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 30); }
         """)
-        close_btn.clicked.connect(parent_panel.collapse_requested)
-        lay.addWidget(close_btn)
+        collapse_btn.clicked.connect(parent_panel.collapse_requested)
+        lay.addWidget(collapse_btn)
 
     def set_status(self, text):
         self.status_label.setText(text)
 
-    def mousePressEvent(self, event: QMouseEvent):
-        if event.button() == Qt.LeftButton:
-            self._drag_offset = event.globalPosition().toPoint() - self._panel.pos()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event: QMouseEvent):
-        if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
-            new_pos = event.globalPosition().toPoint() - self._drag_offset
-            # Clamp to the current screen's available geometry
-            screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
-            geo = screen.availableGeometry()
-            new_pos.setX(max(geo.x(), min(new_pos.x(), geo.right() - self._panel.width())))
-            new_pos.setY(max(geo.y(), min(new_pos.y(), geo.bottom() - self._panel.height())))
-            self._panel.move(new_pos)
-            self.moved.emit(new_pos)
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        self._drag_offset = None
-        super().mouseReleaseEvent(event)
-
 
 class ClipboardPanel(QWidget):
-    """Floating clipboard history card."""
+    """Floating clipboard history card.
+
+    NOT draggable — always positions itself next to the current cursor on
+    every show (see _place_near_cursor). This matches the "click history
+    item to paste at caret" workflow: the panel appears where the user is
+    already working, and a paste auto-collapses it."""
 
     copy_requested = Signal(str)
     delete_requested = Signal(int)
     clear_requested = Signal()
-    position_changed = Signal(int, int)  # x, y
     hide_family_requested = Signal()      # focus left family -> hide capsule + card
     collapse_requested = Signal()         # X button -> collapse card only
 
     WIDTH = 340
     MAX_HEIGHT = 460
 
-    def __init__(self, initial_pos=None, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
@@ -232,7 +307,6 @@ class ClipboardPanel(QWidget):
 
         self._animating = False
         self._pending_hide = False  # True when hide_panel was triggered mid-show
-        self._initial_pos = initial_pos
 
         self._init_ui()
         self._init_anim()
@@ -245,13 +319,19 @@ class ClipboardPanel(QWidget):
 
         # Card container (rounded background painted in paintEvent)
         self.header = PanelHeader(self)
-        self.header.moved.connect(self._on_header_moved)
         root.addWidget(self.header)
 
-        self.scroll = QScrollArea()
+        self.scroll = SmoothScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QScrollArea.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # Single-step = one item row for keyboard arrows + scrollbar buttons.
+        # Wheel scrolling is handled in SmoothScrollArea.wheelEvent (one item
+        # per notch, independent of this singleStep).
+        self.scroll.verticalScrollBar().setSingleStep(_ITEM_ROW_H)
+        # pageStep = one item too, so PageUp/Down also advances one item
+        # (matches the per-item scroll model).
+        self.scroll.verticalScrollBar().setPageStep(_ITEM_ROW_H)
         self.scroll.setStyleSheet("""
             QScrollArea { background: transparent; border: none; }
             QScrollBar:vertical {
@@ -262,6 +342,7 @@ class ClipboardPanel(QWidget):
             }
             QScrollBar::handle:vertical:hover { background: palette(dark); }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
         """)
 
         self.list_container = QWidget()
@@ -290,28 +371,36 @@ class ClipboardPanel(QWidget):
         self.opacity_anim.finished.connect(self._on_opacity_anim_finished)
 
     def paintEvent(self, event):
-        # Paint a feathered shadow + card entirely within the window bounds.
-        # (QGraphicsDropShadowEffect made the dirty region exceed the window
-        # on a translucent Qt.Tool window, triggering UpdateLayeredWindowIndirect
-        # "参数错误". Painting in-bounds avoids the out-of-bounds dirty rect.)
+        # Two-layer paint:
+        #   1. Feathered shadow: 3 concentric rounded rects with rising
+        #      alpha in the 2..8 px ring around the card. Painted in-bounds
+        #      (QGraphicsDropShadowEffect made the dirty region exceed the
+        #      translucent Qt.Tool window and triggered
+        #      UpdateLayeredWindowIndirect "参数错误"). This gives the card
+        #      visual lift without making the card itself translucent.
+        #   2. Opaque card (alpha=255) + 1px white border for edge definition
+        #      against any backdrop. Opaque (was 238) — readability first;
+        #      text must not be clouded by desktop content bleeding through.
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         shadow = QColor(0, 0, 0, 90)
-        # Concentric rounded rects with rising alpha -> soft feathered edge
-        # in the 2..8 px ring around the card. All in-bounds -> no error.
         for inset, alpha in ((2, 18), (4, 28), (6, 42)):
             c = QColor(shadow)
             c.setAlpha(alpha)
             painter.setBrush(c)
             painter.setPen(Qt.NoPen)
             painter.drawRoundedRect(self.rect().adjusted(inset, inset, -inset, -inset), 16, 16)
+        # Opaque card background
         bg = self.palette().color(QPalette.Window)
-        bg.setAlpha(238)
+        bg.setAlpha(255)
         painter.setBrush(bg)
-        border = self.palette().color(QPalette.Mid)
-        border.setAlpha(70)
-        painter.setPen(QPen(border, 1))
+        painter.setPen(Qt.NoPen)
         painter.drawRoundedRect(self.rect().adjusted(8, 8, -8, -8), 14, 14)
+        # 1px dark gray border (matches capsule). #505050 reads on both
+        # light and dark themes without the harshness of pure white.
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(80, 80, 80, 255), 1))
+        painter.drawRoundedRect(self.rect().adjusted(8, 8, -9, -9), 14, 14)
 
     def showEvent(self, event):
         # Apply WS_EX_NOACTIVATE once the HWND exists so mouse clicks on the
@@ -319,12 +408,6 @@ class ClipboardPanel(QWidget):
         FamilyWindowRegistry.refresh_hwnd(self)
         FamilyWindowRegistry.set_no_activate(self)
         super().showEvent(event)
-
-    def _on_header_moved(self, pos):
-        # Remember the dragged position so the next show respects it, and
-        # notify the manager to persist it.
-        self._initial_pos = pos
-        self.position_changed.emit(int(pos.x()), int(pos.y()))
 
     # ----- public API -----
 
@@ -357,17 +440,19 @@ class ClipboardPanel(QWidget):
     def show_panel(self):
         """Show the panel, interrupting any in-progress hide animation by
         reversing from the current opacity. Safe to call when already fully
-        shown (no-op) or while hiding (reverses)."""
+        shown (no-op) or while hiding (reverses).
+
+        Every show repositions the panel next to the current cursor — there
+        is no "remembered" position. This matches the paste-at-caret workflow:
+        the panel always appears where the user is currently working."""
         # Already fully shown and not hiding → nothing to do.
         if self.isVisible() and not self._pending_hide:
             return
 
         first_show = not self.isVisible()
         if first_show:
-            if self._initial_pos is not None:
-                self.move(self._initial_pos)
-            else:
-                self._place_near_cursor()
+            # Always reposition on a fresh show — never use a saved pos.
+            self._place_near_cursor()
             FamilyWindowRegistry.add(self)
             self.setWindowOpacity(0.0)
             self.show()
@@ -412,6 +497,18 @@ class ClipboardPanel(QWidget):
             self.hide()
             FamilyWindowRegistry.remove(self)
 
+    def hide_immediately(self):
+        """Hide instantly — no animation. Used when entering screenshot/
+        annotation overlays where the panel must disappear before the
+        overlay captures the screen (otherwise the panel would be in the
+        screenshot). Symmetric with CapsuleBar.hide_immediately.
+        """
+        self.opacity_anim.stop()
+        self._animating = False
+        self._pending_hide = False
+        self.hide()
+        FamilyWindowRegistry.remove(self)
+
     def _place_near_cursor(self):
         cursor = QCursor.pos()
         screen = QGuiApplication.screenAt(cursor) or QGuiApplication.primaryScreen()
@@ -425,6 +522,3 @@ class ClipboardPanel(QWidget):
         x = max(geo.x(), x)
         y = max(geo.y(), y)
         self.move(x, y)
-
-    def set_initial_pos(self, pos):
-        self._initial_pos = pos

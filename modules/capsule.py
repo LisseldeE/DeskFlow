@@ -251,13 +251,18 @@ class CapsuleBar(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+        # Opaque background (alpha=255) — readability over translucency.
         bg = self.palette().color(QPalette.Window)
-        bg.setAlpha(240)
+        bg.setAlpha(255)
         painter.setBrush(bg)
-        border = self.palette().color(QPalette.Mid)
-        border.setAlpha(40)
-        painter.setPen(QPen(border, 1))
-        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 28, 28)
+        painter.setPen(Qt.NoPen)
+        painter.drawRoundedRect(self.rect(), 28, 28)
+        # 1px dark gray border. Darker than palette.Mid so it reads on both
+        # light and dark themes without being as jarring as pure white.
+        # RGB(80,80,80) ≈ #505050 — neutral, mid-dark.
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(80, 80, 80, 255), 1))
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 28, 28)
 
     def showEvent(self, event):
         # Native HWND may (re)create on show — refresh the registry and apply

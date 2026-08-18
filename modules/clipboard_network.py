@@ -16,11 +16,15 @@ Message types:
   clipboard   either -> host / host -> all   {type, text, origin_peer_id}
   peer_update host  -> all     {type, peer_count}
   bye         joiner -> host   {type}
+  probe       joiner -> host   {type, room_code}            (TCP subnet probe)
+  probe_resp  host  -> joiner  {type, room_code, tcp_port}  (lightweight, no peer registered)
 """
+import concurrent.futures
 import json
 import socket
 import struct
 import threading
+import time
 
 from PySide6.QtCore import QObject, Signal
 
@@ -117,7 +121,18 @@ class _ClientConn:
 # ---------------------------------------------------------------------------
 
 class RoomDiscovery(QObject):
-    """Joiner-side UDP discovery. Broadcasts a request and collects responses."""
+    """Joiner-side UDP discovery. Broadcasts a request and collects responses.
+
+    Uses a random ephemeral port with SO_REUSEADDR — exactly matching the
+    LANSyncBox model.  This avoids any port conflict with RoomResponder
+    (which binds to the discovery port range) on the same machine.
+
+    Key reliability feature: sends discovery_request broadcasts repeatedly
+    (every 500ms) during the entire timeout window, not just a single
+    burst.  On Windows, a single UDP broadcast burst is frequently lost,
+    so repeating gives multiple chances for delivery.  This is essential
+    for the conflict-scan scenario where both devices must detect each
+    other."""
 
     room_found = Signal(str, str, int)   # ip, room_code, tcp_port
     discovery_finished = Signal(list)    # [(ip, room_code, tcp_port), ...]
@@ -129,10 +144,17 @@ class RoomDiscovery(QObject):
         self._running = False
         self._found = {}
         self._lock = threading.Lock()
+        self._room_code = ""           # set during discover()
+        self._timeout = DISCOVERY_TIMEOUT
 
     def discover(self, room_code: str, timeout: float = DISCOVERY_TIMEOUT) -> bool:
         try:
             self._found.clear()
+            self._room_code = room_code
+            self._timeout = timeout
+
+            # Random port + SO_REUSEADDR — matches LANSyncBox.  No conflict
+            # with RoomResponder (which uses the discovery port range).
             self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -140,12 +162,29 @@ class RoomDiscovery(QObject):
             self._sock.settimeout(0.5)
             self._running = True
 
-            threading.Thread(target=self._receive_loop, daemon=True).start()
+            threading.Thread(target=self._recv_loop, daemon=True).start()
+            threading.Thread(target=self._broadcast_loop, daemon=True).start()
 
-            msg = json.dumps(
-                {"type": "discovery_request", "room_code": room_code}
-            ).encode("utf-8")
-            local_ip = _get_local_ip()
+            timer = threading.Timer(timeout, self._finish)
+            timer.daemon = True
+            timer.start()
+            return True
+        except Exception as e:
+            _safe_emit(self.error, f"discovery start failed: {e}")
+            return False
+
+    def _broadcast_loop(self):
+        """Send discovery_request broadcasts every 500ms during the entire
+        discovery window.  A single burst is often lost on Windows; repeating
+        gives multiple chances for the responder on the other device to
+        receive it and reply."""
+        msg = json.dumps(
+            {"type": "discovery_request", "room_code": self._room_code}
+        ).encode("utf-8")
+        local_ip = _get_local_ip()
+        interval = 0.5
+        elapsed = 0.0
+        while self._running and elapsed < self._timeout:
             for port in range(DISCOVERY_PORT_START, DISCOVERY_PORT_END + 1):
                 try:
                     self._sock.sendto(msg, ("<broadcast>", port))
@@ -160,16 +199,12 @@ class RoomDiscovery(QObject):
                         self._sock.sendto(msg, (local_ip, port))
                     except OSError:
                         pass
+            time.sleep(interval)
+            elapsed += interval
 
-            timer = threading.Timer(timeout, self._finish)
-            timer.daemon = True
-            timer.start()
-            return True
-        except Exception as e:
-            _safe_emit(self.error, f"discovery start failed: {e}")
-            return False
-
-    def _receive_loop(self):
+    def _recv_loop(self):
+        """Receive loop: listens for discovery_response messages from
+        existing hosts on the LAN."""
         while self._running:
             try:
                 data, addr = self._sock.recvfrom(2048)
@@ -289,6 +324,149 @@ class RoomResponder(QObject):
 
 
 # ---------------------------------------------------------------------------
+# Reliable TCP subnet probe (fallback / primary discovery)
+# ---------------------------------------------------------------------------
+
+class SubnetTCPProbe(QObject):
+    """Reliable host discovery via directed TCP probing of the local /24 subnet.
+
+    UDP broadcast discovery (RoomDiscovery) is unreliable on Windows — the
+    project's own lesson notes packet loss, delivery issues, and firewall
+    blocks on broadcast. A directed TCP connect, by contrast, is reliably
+    delivered (it is not a broadcast) and only requires:
+
+      * OUTBOUND TCP from the prober (allowed by default, even for new apps),
+      * the host's TCP server to be reachable inbound — which is covered by the
+        same firewall prompt that the host's listen socket triggers on first
+        run.
+
+    So when UDP discovery finds nothing (broadcast dropped, or the host
+    device's firewall blocks inbound UDP to the responder port), this probe
+    still finds the host as long as its TCP server is reachable — the common
+    case once the user has allowed the firewall prompt.
+
+    Mechanism: derive the local /24 base from _get_local_ip(), then for each
+    candidate IP x port in the host TCP range, open a short-lived TCP
+    connection, send a "probe" message, read a "probe_resp", and verify the
+    room code. Probing runs concurrently in a thread pool; the overall call is
+    bounded by `timeout`. Found hosts are emitted via host_found and collected
+    in probe_finished.
+
+    Limitation: assumes a /24 subnet (covers the vast majority of home / small
+    /24 LANs). On larger subnets, hosts outside the local /24 are not probed
+    by this mechanism; UDP discovery (run alongside) covers the broadcast
+    domain.
+    """
+
+    host_found = Signal(str, str, int)   # ip, room_code, tcp_port
+    probe_finished = Signal(list)        # [(ip, room_code, tcp_port), ...]
+    error = Signal(str)
+
+    # Probe tuning. connect_timeout is per-IP:port; unused IPs on a /24 fail
+    # by timeout (slow path), live hosts reply in a few ms. With ~150 workers
+    # the whole /24 x port-range scan completes in well under `timeout`.
+    CONNECT_TIMEOUT = 0.35
+    READ_TIMEOUT = 1.0
+    MAX_WORKERS = 150
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._running = False
+
+    def probe(self, room_code: str, timeout: float = 6.0) -> bool:
+        """Start probing the local /24 subnet. Non-blocking: runs in a daemon
+        thread and emits probe_finished when done (or on timeout)."""
+        try:
+            self._running = True
+            threading.Thread(
+                target=self._probe_worker,
+                args=(room_code, timeout),
+                daemon=True,
+            ).start()
+            return True
+        except Exception as e:
+            self._running = False
+            _safe_emit(self.error, f"probe start failed: {e}")
+            return False
+
+    def _probe_worker(self, room_code: str, timeout: float):
+        results = []
+        lock = threading.Lock()
+        local_ip = _get_local_ip()
+        parts = local_ip.split(".")
+        # No usable LAN IP (e.g. offline) — nothing to probe.
+        if len(parts) != 4 or local_ip == "127.0.0.1":
+            self._running = False
+            _safe_emit(self.probe_finished, [])
+            return
+        subnet_base = ".".join(parts[:3])  # a.b.c — /24 assumption
+        # Candidate IPs: a.b.c.1 .. a.b.c.254, excluding ourselves.
+        ips = [f"{subnet_base}.{i}" for i in range(1, 255)
+               if f"{subnet_base}.{i}" != local_ip]
+        ports = list(range(TCP_PORT_DEFAULT, TCP_PORT_DEFAULT + TCP_PORT_RANGE))
+
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=self.MAX_WORKERS)
+        try:
+            futs = [ex.submit(self._probe_one, ip, p, room_code, results, lock)
+                    for ip in ips for p in ports]
+            # Bound the whole scan; proceed with whatever was found so far.
+            concurrent.futures.wait(futs, timeout=timeout)
+        except Exception as e:
+            _safe_emit(self.error, f"probe worker failed: {e}")
+        finally:
+            # Stop accepting results past this point (late-finishing probes
+            # would emit host_found after probe_finished, confusing callers).
+            self._running = False
+            ex.shutdown(wait=False, cancel_futures=True)
+
+        with lock:
+            out = list(results)
+        _safe_emit(self.probe_finished, out)
+
+    def _probe_one(self, ip, port, room_code, results, lock):
+        if not self._running:
+            return
+        try:
+            sock = socket.create_connection((ip, port), timeout=self.CONNECT_TIMEOUT)
+        except OSError:
+            return  # unused IP / no service / refused — expected, skip
+        try:
+            sock.settimeout(self.READ_TIMEOUT)
+            sock.sendall(pack_message({"type": "probe", "room_code": room_code}))
+            reader = MessageReader()
+            deadline = time.time() + self.READ_TIMEOUT
+            while self._running and time.time() < deadline:
+                try:
+                    data = sock.recv(RECV_CHUNK)
+                except socket.timeout:
+                    break
+                if not data:
+                    break
+                msgs = reader.feed(data)
+                for m in msgs:
+                    if (m.get("type") == "probe_resp"
+                            and m.get("room_code") == room_code):
+                        rc = m.get("room_code", "")
+                        tcp_port = m.get("tcp_port") or port
+                        with lock:
+                            results.append((ip, rc, tcp_port))
+                        _safe_emit(self.host_found, ip, rc, tcp_port)
+                        return
+                if msgs:
+                    break  # got a non-matching message; stop reading
+        except OSError:
+            pass
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    def stop(self):
+        self._running = False
+
+
+# ---------------------------------------------------------------------------
 # TCP host (server + relay)
 # ---------------------------------------------------------------------------
 
@@ -307,6 +485,10 @@ class ClipboardHost(QObject):
         self._clients = {}                   # peer_id -> _ClientConn
         self._clients_lock = threading.Lock()
         self._tcp_port = None
+        # Room code is set by the manager after start(); used to answer
+        # SubnetTCPProbe "probe" messages so a prober can verify the room
+        # without registering as a peer.
+        self.room_code = ""
 
     @property
     def port(self):
@@ -389,6 +571,14 @@ class ClipboardHost(QObject):
             # so it never receives its own update back (no echo loop).
             self._relay(msg, except_peer=conn.peer_id)
             _safe_emit(self.clipboard_received, text, origin)
+        elif t == "probe":
+            # Lightweight discovery probe from a SubnetTCPProbe. Reply with
+            # our room + TCP port so the prober can verify the room match.
+            # Do NOT register the prober as a peer — it closes immediately
+            # after receiving this response.
+            conn.send({"type": "probe_resp",
+                       "room_code": self.room_code,
+                       "tcp_port": self._tcp_port})
         elif t == "bye":
             self._remove_client(conn)
 
@@ -452,13 +642,32 @@ class ClipboardHost(QObject):
 # ---------------------------------------------------------------------------
 
 class ClipboardClient(QObject):
-    """Joiner: connects to the host, sends local updates, receives relays."""
+    """Joiner: connects to the host, sends local updates, receives relays.
+
+    The connect loop is resilient: on connection failure or a dropped
+    connection it retries with exponential backoff (1s -> 2s -> 4s -> ...
+    capped at 8s) up to MAX_RETRIES times. This matters when the manager
+    steps down from host to client after a conflict scan (the other host
+    may need a moment to finish coming up), and for transient Wi-Fi /
+    firewall hiccups. `reconnecting` is emitted between attempts so the UI
+    can show "connecting..." instead of "disconnected" while retrying.
+    """
 
     clipboard_received = Signal(str)
     peer_count_changed = Signal(int)
     connected = Signal()
     disconnected = Signal()
+    reconnecting = Signal()  # retrying after failure/drop — not terminal
     error = Signal(str)
+
+    # Retry tuning. Total worst-case backoff across MAX_RETRIES attempts
+    # is ~2 minutes, which comfortably covers a peer finishing host startup
+    # or a brief network blip. A successful welcome resets the counter so
+    # a connection that lived for a while still gets a full retry budget
+    # when it later drops.
+    MAX_RETRIES = 8
+    INITIAL_BACKOFF = 1.0
+    MAX_BACKOFF = 8.0
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -469,10 +678,14 @@ class ClipboardClient(QObject):
         self._send_lock = threading.Lock()
         self._host = None
         self._port = None
+        # Set True on welcome receipt, reset at the start of each attempt
+        # and after the connection ends. Drives the "were we ever connected
+        # on this attempt?" decision in _connect_loop.
+        self._welcomed = False
 
     @property
     def is_connected(self):
-        return self._running and self._sock is not None
+        return self._welcomed and self._sock is not None
 
     def connect_to_host(self, host: str, port: int, room_code: str,
                         peer_id: str, peer_name: str):
@@ -487,38 +700,71 @@ class ClipboardClient(QObject):
         ).start()
 
     def _connect_loop(self, host, port, room_code, peer_id, peer_name):
-        try:
-            self._sock = socket.create_connection((host, port), timeout=5)
-            self._sock.settimeout(None)
-            self._send({"type": "hello", "room_code": room_code,
-                        "peer_id": peer_id, "peer_name": peer_name})
-            # `connected` is emitted on welcome receipt (see _on_message),
-            # so the host has registered us by the time it fires.
-            while self._running:
-                try:
-                    data = self._sock.recv(RECV_CHUNK)
-                except OSError:
-                    break
-                if not data:
-                    break
-                try:
-                    msgs = self._reader.feed(data)
-                except Exception:
-                    break
-                for msg in msgs:
-                    self._on_message(msg)
-        except Exception as e:
-            if self._running:
-                _safe_emit(self.error, f"connect failed: {e}")
-        finally:
-            self._running = False
-            if self._sock:
-                try:
-                    self._sock.close()
-                except Exception:
-                    pass
-                self._sock = None
-            _safe_emit(self.disconnected)
+        attempt = 0
+        while self._running:
+            self._welcomed = False
+            # Fresh reader per attempt — buffered partial frames from a
+            # previous connection must not bleed into the new one.
+            self._reader = MessageReader()
+            try:
+                self._sock = socket.create_connection((host, port), timeout=5)
+                self._sock.settimeout(None)
+                self._send({"type": "hello", "room_code": room_code,
+                            "peer_id": peer_id, "peer_name": peer_name})
+                # `connected` is emitted on welcome receipt (see _on_message),
+                # so the host has registered us by the time it fires.
+                while self._running:
+                    try:
+                        data = self._sock.recv(RECV_CHUNK)
+                    except OSError:
+                        break
+                    if not data:
+                        break
+                    try:
+                        msgs = self._reader.feed(data)
+                    except Exception:
+                        break
+                    for msg in msgs:
+                        self._on_message(msg)
+            except Exception:
+                # Silent: the retry path below handles all failure modes
+                # (initial connect failure, dropped mid-stream, etc.).
+                # Surfacing every retry as `error` would flip the UI to
+                # "failed" even though we're still trying.
+                pass
+            finally:
+                if self._sock:
+                    try:
+                        self._sock.close()
+                    except Exception:
+                        pass
+                    self._sock = None
+                if self._welcomed:
+                    # We were connected and now lost it — emit disconnect
+                    # so the UI reflects reality, then retry.
+                    _safe_emit(self.disconnected)
+                    attempt = 0  # reset backoff after a real connection
+
+            if not self._running:
+                return  # clean shutdown via disconnect()
+
+            attempt += 1
+            if attempt > self.MAX_RETRIES:
+                # Exhausted retries without ever connecting (or without
+                # reconnecting after a drop) — terminal disconnect.
+                _safe_emit(self.disconnected)
+                return
+
+            _safe_emit(self.reconnecting)
+            backoff = min(
+                self.INITIAL_BACKOFF * (2 ** (attempt - 1)),
+                self.MAX_BACKOFF,
+            )
+            # Sleep in small chunks so disconnect() is responsive.
+            slept = 0.0
+            while self._running and slept < backoff:
+                time.sleep(0.1)
+                slept += 0.1
 
     def _on_message(self, msg):
         t = msg.get("type")
@@ -530,6 +776,7 @@ class ClipboardClient(QObject):
                 self._peer_id = pid
             # Emitted here (not at hello-send) so the host has confirmed
             # registration before listeners act on "connected".
+            self._welcomed = True
             _safe_emit(self.connected)
         elif t == "peer_update":
             _safe_emit(self.peer_count_changed, msg.get("peer_count", 0))

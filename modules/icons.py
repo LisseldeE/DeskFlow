@@ -23,6 +23,10 @@ ICON_CLOSE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill
   <line x1="6" y1="6" x2="18" y2="18"/>
 </svg>"""
 
+ICON_MINUS = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <line x1="5" y1="12" x2="19" y2="12"/>
+</svg>"""
+
 ICON_RECTANGLE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
   <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
 </svg>"""
@@ -80,6 +84,7 @@ def icon_svg(name):
         "annotation": ICON_ANNOTATION,
         "settings": ICON_SETTINGS,
         "close": ICON_CLOSE,
+        "minus": ICON_MINUS,
         "rectangle": ICON_RECTANGLE,
         "freeform": ICON_FREEFORM,
         "text": ICON_TEXT,
