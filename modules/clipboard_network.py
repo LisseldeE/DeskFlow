@@ -658,6 +658,7 @@ class ClipboardClient(QObject):
     connected = Signal()
     disconnected = Signal()
     reconnecting = Signal()  # retrying after failure/drop — not terminal
+    retries_exhausted = Signal()  # gave up after MAX_RETRIES attempts — caller decides recovery
     error = Signal(str)
 
     # Retry tuning. Total worst-case backoff across MAX_RETRIES attempts
@@ -739,19 +740,30 @@ class ClipboardClient(QObject):
                     except Exception:
                         pass
                     self._sock = None
-                if self._welcomed:
-                    # We were connected and now lost it — emit disconnect
-                    # so the UI reflects reality, then retry.
-                    _safe_emit(self.disconnected)
-                    attempt = 0  # reset backoff after a real connection
 
             if not self._running:
                 return  # clean shutdown via disconnect()
 
+            # Signal semantics:
+            #   - While retrying (including right after a real connection
+            #     dropped), emit ONLY `reconnecting` so the UI shows
+            #     "connecting..." — NOT `disconnected`, which is reserved
+            #     for the terminal "we gave up" state below.
+            #   - On the terminal state (retries exhausted), emit
+            #     `retries_exhausted` then `disconnected` so the manager
+            #     can self-heal (re-discover / become host).
+            if self._welcomed:
+                attempt = 0  # reset backoff after a real connection
+
             attempt += 1
             if attempt > self.MAX_RETRIES:
                 # Exhausted retries without ever connecting (or without
-                # reconnecting after a drop) — terminal disconnect.
+                # reconnecting after a drop). Emit retries_exhausted so the
+                # manager can re-discover (the other host may have crashed
+                # — re-running discovery will either find a new host or
+                # promote us to host). Then emit disconnected as the
+                # terminal UI state until recovery kicks in.
+                _safe_emit(self.retries_exhausted)
                 _safe_emit(self.disconnected)
                 return
 

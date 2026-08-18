@@ -386,13 +386,6 @@ class ClipboardManager(QObject):
         # No conflict found, schedule next scan.
         self._schedule_host_conflict_scan()
 
-    def _on_conflict_scan_error(self, msg):
-        # Legacy hook kept for any external caller; the part-error handler
-        # above now drives the merged evaluation.
-        self._scanning_for_conflict = False
-        if self._enabled and self._role == "host":
-            self._schedule_host_conflict_scan()
-
     def _resolve_host_conflict(self, other_host_ip, other_host_port):
         """Step down as host and join the other host as a client."""
         # Stop the conflict scan first to avoid re-entrance.
@@ -443,6 +436,7 @@ class ClipboardManager(QObject):
         self._client.connected.connect(self._on_client_connected)
         self._client.disconnected.connect(self._on_client_disconnected)
         self._client.reconnecting.connect(self._on_client_reconnecting)
+        self._client.retries_exhausted.connect(self._on_client_retries_exhausted)
         self._client.error.connect(self._on_network_error)
         self._client.connect_to_host(
             host_ip, port, self._room_code, self._peer_id, self._peer_name
@@ -470,6 +464,27 @@ class ClipboardManager(QObject):
         if not self._enabled:
             return
         self._set_status(I18n.tr("clipboard_status_disconnected"))
+
+    def _on_client_retries_exhausted(self):
+        """The client gave up after MAX_RETRIES attempts to reach the host.
+        Self-heal: tear down the dead client and re-run discovery. If the
+        other host has come back, we re-join it; if not, we become host so
+        the LAN has a host again instead of stranding both devices.
+
+        This closes the 'manager stuck as client with no connection' hole:
+        when the host we stepped down to join is unreachable for the full
+        retry budget (~92s default), we don't strand the user in
+        'disconnected' — we re-evaluate and may promote ourselves.
+        """
+        if not self._enabled:
+            return
+        # Drop the dead client and re-discover. _start_connection also
+        # re-arms the conflict scan if we end up becoming host.
+        self._stop_network()
+        self._enabled = True  # _stop_network doesn't touch _enabled, but be explicit
+        self._connecting = True
+        self._set_status(I18n.tr("clipboard_status_scanning"))
+        self._start_connection(self._room_code)
 
     def _on_network_error(self, msg):
         self._set_status(I18n.tr("clipboard_status_failed"))
