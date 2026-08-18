@@ -14,6 +14,7 @@ from modules.capsule import CapsuleBar
 from modules.screenshot import ScreenshotOverlay
 from modules.annotation import AnnotationOverlay
 from modules.settings import SettingsDialog, apply_autostart
+from modules.clipboard_manager import ClipboardManager
 
 
 def load_app_icon():
@@ -40,6 +41,11 @@ class DeskFlowApp:
 
         self.capsule = CapsuleBar()
         self.active_overlay = None
+
+        # Clipboard manager wires itself to the capsule + panel and restores
+        # persisted state (enabled / expanded / room / position) from config.
+        # Created before connect_signals so the button wiring can reference it.
+        self.clipboard_mgr = ClipboardManager(self.capsule)
 
         self.setup_tray()
         self.setup_hotkey()
@@ -72,11 +78,26 @@ class DeskFlowApp:
         self.capsule.btn_annotation.clicked.connect(self._on_annotation)
         self.capsule.btn_settings.clicked.connect(self._on_settings)
         self.capsule.btn_close.clicked.connect(self._on_close)
+        # Clipboard: left-click toggles on/off, right-click opens room config.
+        self.capsule.btn_clipboard.clicked.connect(self.clipboard_mgr.on_button_left)
+        self.capsule.btn_clipboard.rightClicked.connect(self.clipboard_mgr.on_button_right)
 
     def toggle_capsule(self):
         if self.active_overlay is not None:
             return
-        self.capsule.toggle_visibility()
+        # When the LAN clipboard is enabled, Ctrl+` surfaces the capsule and
+        # (if the user last left it expanded) the clipboard card together;
+        # toggling again hides both. Family visibility is checked as a whole
+        # (capsule OR panel) so a stray panel doesn't strand the family.
+        if self.clipboard_mgr.is_enabled():
+            if self.capsule.isVisible() or self.clipboard_mgr.is_panel_visible():
+                self.clipboard_mgr.hide_family()
+            else:
+                self.capsule.show_capsule()
+                if self.clipboard_mgr.is_expanded():
+                    self.clipboard_mgr.show_card()
+        else:
+            self.capsule.toggle_visibility()
 
     def _on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.DoubleClick:
@@ -104,9 +125,15 @@ class DeskFlowApp:
             self.active_overlay = None
 
     def _on_close(self):
-        self.capsule.hide_capsule()
+        # Close dismisses the whole family (capsule + clipboard card).
+        # force_family_hide bypasses the show-debounce — user-explicit action.
+        self.capsule.force_family_hide()
 
     def exit_app(self):
+        # Uninstall the mouse hook first so no callback fires while we
+        # tear down the rest of the family.
+        self.capsule.shutdown()
+        self.clipboard_mgr.shutdown()
         unregister_hotkey()
         self.app.quit()
 

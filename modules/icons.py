@@ -37,6 +37,42 @@ ICON_TEXT = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill=
   <line x1="8" y1="20" x2="16" y2="20"/>
 </svg>"""
 
+# --- Clipboard feature icons ---
+
+ICON_CLIPBOARD = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="5" y="4" width="14" height="17" rx="2"/>
+  <path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/>
+  <path d="M9 11h6M9 15h4"/>
+</svg>"""
+
+ICON_COPY = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="9" y="9" width="11" height="11" rx="2"/>
+  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+</svg>"""
+
+ICON_TRASH = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3 6h18"/>
+  <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
+  <path d="M5 6l1 14a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1l1-14"/>
+  <path d="M10 11v6M14 11v6"/>
+</svg>"""
+
+ICON_NETWORK = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="6" cy="12" r="2.5"/>
+  <circle cx="18" cy="6" r="2.5"/>
+  <circle cx="18" cy="18" r="2.5"/>
+  <path d="M8.2 10.8l7.6-3.6M8.2 13.2l7.6 3.6"/>
+</svg>"""
+
+ICON_ROOM = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="7" cy="15" r="4"/>
+  <path d="M10 12l9-9M16 6l2 2M14 8l2 2"/>
+</svg>"""
+
+ICON_CHECK = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <polyline points="20 6 9 17 4 12"/>
+</svg>"""
+
 
 def icon_svg(name):
     icons = {
@@ -47,5 +83,11 @@ def icon_svg(name):
         "rectangle": ICON_RECTANGLE,
         "freeform": ICON_FREEFORM,
         "text": ICON_TEXT,
+        "clipboard": ICON_CLIPBOARD,
+        "copy": ICON_COPY,
+        "trash": ICON_TRASH,
+        "network": ICON_NETWORK,
+        "room": ICON_ROOM,
+        "check": ICON_CHECK,
     }
     return icons.get(name)

@@ -4,6 +4,7 @@ __pycache__/
 .md/
 output/
 dist/
+test/
 
 *.exe
 *.bat

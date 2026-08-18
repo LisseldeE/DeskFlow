@@ -1,18 +1,26 @@
-import time
-import ctypes
 from ctypes import wintypes
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QGraphicsDropShadowEffect, QApplication
-from PySide6.QtCore import Qt, QPoint, QSize, QRect, QPropertyAnimation, QEasingCurve, QEvent, QByteArray, QAbstractNativeEventFilter, QTimer
-from PySide6.QtGui import QPainter, QColor, QPen, QPixmap, QIcon, QGuiApplication, QCursor, QPalette, QKeyEvent
+from PySide6.QtWidgets import (
+    QWidget, QHBoxLayout, QPushButton, QGraphicsDropShadowEffect, QApplication
+)
+from PySide6.QtCore import (
+    Qt, QPoint, QSize, QPropertyAnimation, QEasingCurve, QEvent,
+    QByteArray, QAbstractNativeEventFilter, Signal
+)
+from PySide6.QtGui import (
+    QPainter, QColor, QPen, QPixmap, QIcon, QGuiApplication, QPalette,
+    QKeyEvent, QCursor
+)
 from PySide6.QtSvg import QSvgRenderer
-from modules.icons import ICON_SCREENSHOT, ICON_ANNOTATION, ICON_SETTINGS, ICON_CLOSE
+from modules.icons import (
+    ICON_SCREENSHOT, ICON_ANNOTATION, ICON_SETTINGS, ICON_CLOSE, ICON_CLIPBOARD
+)
 from modules.i18n import I18n
+from modules.family import FamilyWindowRegistry
+from modules.global_mouse_hook import GlobalMouseHook
 
 # Windows constants
 WM_KEYDOWN = 0x0100
 VK_ESCAPE = 0x1B
-WM_ACTIVATE = 0x0006
-WA_INACTIVE = 0
 
 
 def _system_color(role):
@@ -34,7 +42,11 @@ def _make_icon(svg_content, color="#555555", size=22):
 
 
 class CapsuleNativeFilter(QAbstractNativeEventFilter):
-    """Native event filter to catch global ESC key (WM_KEYDOWN VK_ESCAPE)"""
+    """Native event filter to catch global ESC key (WM_KEYDOWN VK_ESCAPE).
+
+    Triggers a family-wide hide as long as ANY family window is visible
+    (capsule OR panel) — not just the capsule. ESC is a user-explicit intent
+    so it bypasses the show-debounce via force_family_hide()."""
 
     def __init__(self, capsule):
         super().__init__()
@@ -44,45 +56,64 @@ class CapsuleNativeFilter(QAbstractNativeEventFilter):
         if eventType == b"windows_generic_MSG":
             msg = wintypes.MSG.from_address(int(message.__int__()))
             if msg.message == WM_KEYDOWN and msg.wParam == VK_ESCAPE:
-                if self.capsule.isVisible() and not self.capsule._animating:
-                    self.capsule.hide_capsule()
+                if FamilyWindowRegistry.any_visible() and not self.capsule._animating:
+                    self.capsule.force_family_hide()
                     return True, 0
         return False, 0
 
 
 class AnimatedIconButton(QPushButton):
-    """Button with SVG icon, hover effect, and press-down animation.
-    Supports custom hover color for special buttons (e.g. close button red)."""
+    """Button with SVG icon, hover effect, press-down animation, and an
+    optional persistent "active" state (lit background) for toggle buttons.
 
-    def __init__(self, svg_content, tooltip="", hover_color=None, hover_bg_color=None, parent=None):
+    Emits `rightClicked` on right-click (used by the clipboard button to
+    open the room config)."""
+
+    rightClicked = Signal()
+
+    def __init__(self, svg_content, tooltip="", hover_color=None,
+                 hover_bg_color=None, parent=None):
         super().__init__(parent)
         self._svg = svg_content
         self._normal_color = _system_color(QPalette.WindowText)
         self._hover_color = hover_color or _system_color(QPalette.Highlight)
+        self._hover_bg = hover_bg_color or QApplication.palette().color(QPalette.Highlight)
         self._original_pos = None
         self._is_pressed = False
+        self._active = False
 
         self.setToolTip(tooltip)
         self.setFixedSize(44, 44)
         self.setCursor(Qt.PointingHandCursor)
+        # Suppress the default context menu so right-click is ours alone.
+        self.setContextMenuPolicy(Qt.PreventContextMenu)
         self.setIcon(_make_icon(svg_content, self._normal_color))
         self.setIconSize(QSize(22, 22))
+        self._apply_style()
 
-        # Hover background color (custom or system highlight)
-        if hover_bg_color:
-            h = hover_bg_color
+    def _apply_style(self):
+        h = self._hover_bg
+        if self._active:
+            base = f"rgba({h.red()}, {h.green()}, {h.blue()}, 75)"
+            hover = f"rgba({h.red()}, {h.green()}, {h.blue()}, 115)"
         else:
-            h = QApplication.palette().color(QPalette.Highlight)
+            base = "transparent"
+            hover = f"rgba({h.red()}, {h.green()}, {h.blue()}, 50)"
         self.setStyleSheet(f"""
             QPushButton {{
-                background-color: transparent;
+                background-color: {base};
                 border: none;
                 border-radius: 8px;
             }}
             QPushButton:hover {{
-                background-color: rgba({h.red()}, {h.green()}, {h.blue()}, 50);
+                background-color: {hover};
             }}
         """)
+
+    def set_active(self, active):
+        """Persistent lit background to indicate a toggle is ON."""
+        self._active = bool(active)
+        self._apply_style()
 
     def enterEvent(self, event):
         self.setIcon(_make_icon(self._svg, self._hover_color))
@@ -94,6 +125,9 @@ class AnimatedIconButton(QPushButton):
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
+        if event.button() == Qt.RightButton:
+            self.rightClicked.emit()
+            return
         if event.button() == Qt.LeftButton:
             self._original_pos = self.pos()
             self._is_pressed = True
@@ -126,40 +160,48 @@ class AnimatedIconButton(QPushButton):
 
 class CapsuleBar(QWidget):
     """Main floating capsule bar with tool buttons.
-    Background follows system palette - no fixed colors.
-    Click outside auto-hides with animation, close button has red hover."""
+
+    The capsule is the anchor of a "family" of windows (itself + the
+    clipboard panel + the room dialog). Focus moving to a family window
+    does NOT trigger a hide; focus leaving the family hides everything.
+    Background follows the system palette - no fixed colors.
+    """
+
+    hide_family_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # Qt.Tool: no taskbar icon. WindowStaysOnTopHint: stays above all windows.
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(240, 56)
+        # Never steal focus on show — the user's caret stays in their input.
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setFixedSize(300, 56)
 
         self._animating = False
         self._pending_hide = False
-        # Show debounce: ignore hide requests for 500ms after show
-        self._ignore_hide_until = 0.0
         self.setup_ui()
         self.setup_animations()
         self.setup_shadow()
         self.hide()
 
-        # Install native event filters
+        # The capsule is always a family window (the anchor).
+        FamilyWindowRegistry.add(self)
+
         # ESC: catches WM_KEYDOWN VK_ESCAPE at Windows message level
         self._esc_filter = CapsuleNativeFilter(self)
         QApplication.instance().installNativeEventFilter(self._esc_filter)
 
-        # Global event filter: catches mouse press outside capsule (within Qt app)
-        QApplication.instance().installEventFilter(self)
-
-        # Polling timer: reliable fallback for click-outside detection
-        # Checks mouse button state + focus window every 50ms when capsule is visible
-        self._poll_timer = QTimer()
-        self._poll_timer.setInterval(50)
-        self._poll_timer.timeout.connect(self._poll_check)
+        # Global low-level mouse hook: the OS delivers every mouse-down on
+        # the screen to us before the target window sees it. When the click
+        # is not inside any family window's HWND rect, we hide the family.
+        # This is far more reliable than the foreground-window poll it
+        # replaces — it works for clicks on other apps, the desktop, the
+        # taskbar, the tray, etc., not just inside the Qt app.
+        self._mouse_hook = GlobalMouseHook()
+        self._mouse_hook.on_outside_click = self._on_outside_click
+        self._mouse_hook.install()
 
     def setup_ui(self):
         layout = QHBoxLayout(self)
@@ -173,6 +215,10 @@ class CapsuleBar(QWidget):
         self.btn_annotation = AnimatedIconButton(
             ICON_ANNOTATION, I18n.tr("annotation"))
         layout.addWidget(self.btn_annotation)
+
+        self.btn_clipboard = AnimatedIconButton(
+            ICON_CLIPBOARD, I18n.tr("clipboard"))
+        layout.addWidget(self.btn_clipboard)
 
         self.btn_settings = AnimatedIconButton(
             ICON_SETTINGS, I18n.tr("settings"))
@@ -203,7 +249,6 @@ class CapsuleBar(QWidget):
         self.opacity_anim.setEasingCurve(QEasingCurve.OutCubic)
 
     def paintEvent(self, event):
-        """Paint capsule background using system palette colors"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         bg = self.palette().color(QPalette.Window)
@@ -212,71 +257,71 @@ class CapsuleBar(QWidget):
         border = self.palette().color(QPalette.Mid)
         border.setAlpha(40)
         painter.setPen(QPen(border, 1))
-        painter.drawRoundedRect(
-            self.rect().adjusted(1, 1, -1, -1), 28, 28)
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 28, 28)
 
-    def nativeEvent(self, eventType, message):
-        """Intercept WM_ACTIVATE to detect window deactivation (click outside)."""
-        if eventType == b"windows_generic_MSG":
-            msg = wintypes.MSG.from_address(int(message.__int__()))
-            if msg.message == WM_ACTIVATE:
-                if msg.wParam & 0xFFFF == WA_INACTIVE:
-                    if self.isVisible() and not self._animating:
-                        self.hide_capsule()
-                        return True, 0
-        return super().nativeEvent(eventType, message)
+    def showEvent(self, event):
+        # Native HWND may (re)create on show — refresh the registry and apply
+        # WS_EX_NOACTIVATE so mouse clicks on the capsule don't steal focus
+        # from the user's input field either.
+        FamilyWindowRegistry.refresh_hwnd(self)
+        FamilyWindowRegistry.set_no_activate(self)
+        super().showEvent(event)
 
-    def eventFilter(self, obj, event):
-        """Global event filter: detect mouse press outside capsule (within Qt app)."""
-        if event.type() == QEvent.MouseButtonPress:
-            if self.isVisible() and not self._animating:
-                try:
-                    click_pos = event.globalPosition().toPoint()
-                except AttributeError:
-                    click_pos = event.globalPos()
-                capsule_rect = QRect(self.mapToGlobal(QPoint(0, 0)), self.size())
-                if not capsule_rect.contains(click_pos):
-                    self.hide_capsule()
-                    return True
-        return super().eventFilter(obj, event)
+    def set_clipboard_active(self, active):
+        self.btn_clipboard.set_active(active)
+
+    # ----- family-aware hide -----
+
+    def _on_outside_click(self):
+        """Called synchronously by GlobalMouseHook when a mouse-down lands
+        outside any family window's HWND rect.
+
+        Synchronous is intentional: it lets the hook fire BEFORE Qt finishes
+        processing the click that triggered show_capsule (e.g. a tray-icon
+        click that toggles the capsule). At that moment the family is still
+        invisible, so the any_visible() check no-ops and we don't dismiss
+        the capsule we're about to show. An async QTimer.singleShot(0) here
+        would race the show_capsule() call and dismiss it on the next loop
+        iteration.
+        """
+        if FamilyWindowRegistry.any_visible():
+            self.hide_family_requested.emit()
+
+    def request_family_hide(self):
+        """Outside-click / focus-loss path. No debounce is needed: a real
+        click is unambiguous user intent (unlike transient foreground
+        flicker that the old poll had to ride out). Emits and lets the
+        ClipboardManager drive hide_family() so the whole family collapses
+        together — never hide_capsule() alone, which would strand the panel.
+        """
+        self.hide_family_requested.emit()
+
+    def force_family_hide(self):
+        """User-explicit path (ESC, close button, Ctrl+` toggle-off).
+        Same emit as request_family_hide — both names kept for clarity
+        (callers signal intent: force = bypass any gate, request = reactive).
+        """
+        self.hide_family_requested.emit()
+
+    def shutdown(self):
+        """Release OS resources. Call from DeskFlow.exit_app before quit."""
+        self._mouse_hook.uninstall()
 
     def event(self, event):
-        """Intercept ESC key press to trigger animated hide.
-        Works when the capsule has keyboard focus (within Qt app)."""
+        """ESC key when the capsule itself has keyboard focus."""
         if event.type() == QEvent.KeyPress:
             if isinstance(event, QKeyEvent) and event.key() == Qt.Key_Escape:
-                if self.isVisible() and not self._animating:
-                    self.hide_capsule()
+                if FamilyWindowRegistry.any_visible() and not self._animating:
+                    self.force_family_hide()
                     return True
         return super().event(event)
 
     def hideEvent(self, event):
-        """Handle final hide after animation completes"""
         self.pos_anim.stop()
         self.opacity_anim.stop()
         self._animating = False
         self._pending_hide = False
-        self._poll_timer.stop()
         super().hideEvent(event)
-
-    def _poll_check(self):
-        """Polling fallback for click-outside detection.
-        Checks every 50ms: mouse button pressed outside capsule, or focus window changed."""
-        if not self._can_hide():
-            return
-        # Check 1: mouse button pressed outside capsule geometry
-        if QApplication.mouseButtons() != Qt.NoButton:
-            cursor_pos = QCursor.pos()
-            capsule_rect = QRect(self.mapToGlobal(QPoint(0, 0)), self.size())
-            if not capsule_rect.contains(cursor_pos):
-                self.hide_capsule()
-                return
-        # Check 2: focus window is not the capsule (or None, meaning desktop/other app)
-        active = QGuiApplication.focusWindow()
-        my_handle = self.windowHandle()
-        if my_handle is not None:
-            if active is None or active != my_handle:
-                self.hide_capsule()
 
     def _get_screen_geo(self):
         cursor_pos = QCursor.pos()
@@ -285,16 +330,6 @@ class CapsuleBar(QWidget):
             screen = QGuiApplication.primaryScreen()
         return screen.availableGeometry()
 
-    def _can_hide(self):
-        """Check if the capsule can be hidden (respecting show debounce)."""
-        if self._animating:
-            return False
-        if not self.isVisible():
-            return False
-        if time.time() < self._ignore_hide_until:
-            return False
-        return True
-
     def _on_anim_finished(self):
         self._animating = False
         if self._pending_hide:
@@ -302,42 +337,56 @@ class CapsuleBar(QWidget):
             self.hide()
 
     def show_capsule(self):
-        if self._animating:
-            return
-        if self.isVisible():
+        """Show the capsule, interrupting any in-progress hide animation by
+        reversing from the current opacity / position. Safe to call when
+        already fully shown (no-op) or while hiding (reverses)."""
+        # Already fully shown and not hiding → nothing to do.
+        if self.isVisible() and not self._pending_hide:
             return
 
+        first_show = not self.isVisible()
         self._animating = True
         self._pending_hide = False
-        # Debounce: ignore hide requests for 500ms after show
-        # This prevents hide/show loop after overlay operations (screenshot, annotation)
-        self._ignore_hide_until = time.time() + 0.5
         screen = self._get_screen_geo()
         target_x = (screen.width() - self.width()) // 2 + screen.x()
-        target_y = screen.y() + 30  # Higher position
+        target_y = screen.y() + 30
 
-        self.setWindowOpacity(0.0)
-        self.move(int(target_x), int(-self.height()))
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        if first_show:
+            # Boot from off-screen at zero opacity.
+            self.setWindowOpacity(0.0)
+            self.move(int(target_x), int(-self.height()))
+            self.show()
+            self.raise_()
+            # NOTE: no activateWindow() — floats without taking focus.
+            start_pos = QPoint(int(target_x), int(-self.height()))
+            start_opacity = 0.0
+        else:
+            # Reverse from wherever the hide animation currently is.
+            start_pos = self.pos()
+            start_opacity = self.windowOpacity()
 
-        self.pos_anim.setStartValue(QPoint(int(target_x), int(-self.height())))
+        self.pos_anim.stop()
+        self.opacity_anim.stop()
+        self.pos_anim.setStartValue(start_pos)
         self.pos_anim.setEndValue(QPoint(int(target_x), int(target_y)))
-        self.opacity_anim.setStartValue(0.0)
+        self.opacity_anim.setStartValue(start_opacity)
         self.opacity_anim.setEndValue(1.0)
         self.pos_anim.start()
         self.opacity_anim.start()
-        self._poll_timer.start()
 
     def hide_capsule(self):
-        if not self._can_hide():
+        """Hide the capsule, interrupting any in-progress show animation by
+        reversing from the current opacity / position. Safe to call when
+        already hidden (no-op) or while showing (reverses)."""
+        if not self.isVisible():
             return
 
         self._animating = True
         self._pending_hide = True
         current_pos = self.pos()
 
+        self.pos_anim.stop()
+        self.opacity_anim.stop()
         self.pos_anim.setStartValue(current_pos)
         self.pos_anim.setEndValue(
             QPoint(int(current_pos.x()), int(-self.height())))
@@ -354,9 +403,11 @@ class CapsuleBar(QWidget):
         self.hide()
 
     def toggle_visibility(self):
-        if self._animating:
-            return
-        if self.isVisible():
-            self.hide_capsule()
+        # User-explicit toggle: bypass the focus-loss debounce via
+        # force_family_hide so a quick second press isn't swallowed by the
+        # 500ms show-debounce. The animation itself is reversible, so we
+        # no longer bail out when _animating is True.
+        if self.isVisible() and not self._pending_hide:
+            self.force_family_hide()
         else:
             self.show_capsule()
