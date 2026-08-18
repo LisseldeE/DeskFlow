@@ -1,38 +1,17 @@
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QPushButton, QTextEdit, QApplication
+    QWidget, QHBoxLayout, QTextEdit, QApplication, QGraphicsDropShadowEffect
 )
-from PySide6.QtCore import Qt, QRect, QPoint, QSize, Signal, QByteArray
+from PySide6.QtCore import (
+    Qt, QRect, QPoint, QPointF, Signal, QVariantAnimation, QEasingCurve
+)
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QFont, QGuiApplication, QFontMetrics,
-    QPainterPath, QPalette, QIcon, QPixmap, QBrush, QKeyEvent
+    QPainterPath, QPalette, QBrush, QKeyEvent
 )
-from PySide6.QtSvg import QSvgRenderer
 from modules.overlay import BaseOverlay
 from modules.icons import ICON_RECTANGLE, ICON_FREEFORM, ICON_TEXT, ICON_CLOSE
 from modules.i18n import I18n
-
-
-def _make_icon(svg_content, color="#555555", size=22):
-    """Create QIcon from SVG string with color substitution"""
-    colored = svg_content.replace('stroke="currentColor"', f'stroke="{color}"')
-    renderer = QSvgRenderer(QByteArray(colored.encode()))
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.transparent)
-    painter = QPainter(pixmap)
-    renderer.render(painter)
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _system_color(mode):
-    """Get system color by mode: 'normal' -> WindowText, 'accent' -> Highlight"""
-    p = QApplication.palette()
-    if mode == "normal":
-        c = p.color(QPalette.WindowText)
-        return f"#{c.red():02x}{c.green():02x}{c.blue():02x}"
-    else:
-        c = p.color(QPalette.Highlight)
-        return f"#{c.red():02x}{c.green():02x}{c.blue():02x}"
+from modules.widgets import GlassIconButton, paint_pill
 
 
 def _annotation_border_color():
@@ -85,6 +64,103 @@ class TextEditWidget(QTextEdit):
         super().focusOutEvent(event)
 
 
+class AnnotationToolbar(QWidget):
+    """Floating annotation sub-bar: mode buttons + close.
+
+    Painted with the same pill look as the capsule bar (shared paint_pill),
+    so both read as one design family; floats over the dark overlay with a
+    soft drop shadow."""
+
+    mode_changed = Signal(str)
+    close_clicked = Signal()
+
+    BTN = 40
+    RADIUS = 26
+    BAR_H = 52
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFixedHeight(self.BAR_H)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)
+        shadow.setColor(QColor(0, 0, 0, 90))
+        shadow.setOffset(0, 4)
+        self.setGraphicsEffect(shadow)
+
+        # Mode order = left-to-right button order. `_slide` is a float index
+        # (0..2) that the selection plate glides across as it moves between
+        # buttons — linear travel with slow-fast-slow easing (InOutCubic).
+        self._modes = ["rectangle", "freeform", "text"]
+        self._slide = 0.0
+        self._slide_anim = QVariantAnimation(self)
+        self._slide_anim.setDuration(280)
+        self._slide_anim.setEasingCurve(QEasingCurve.InOutCubic)
+        self._slide_anim.valueChanged.connect(self._on_slide)
+
+        self.setup_ui()
+        self.set_selected("rectangle")
+
+    def set_selected(self, mode):
+        """Glide the selection plate to the given mode's button position."""
+        if mode not in self.mode_buttons:
+            return
+        target = float(self._modes.index(mode))
+        self._slide_anim.stop()
+        self._slide_anim.setStartValue(self._slide)
+        self._slide_anim.setEndValue(target)
+        self._slide_anim.start()
+
+    def _on_slide(self, value):
+        self._slide = float(value)
+        self.update()
+
+    def setup_ui(self):
+        layout = QHBoxLayout(self)
+        layout.setSpacing(8)
+        layout.setContentsMargins(10, 6, 10, 6)
+
+        self.mode_buttons = {}
+        for mode, svg, tip in [
+            ("rectangle", ICON_RECTANGLE, I18n.tr("rectangle")),
+            ("freeform", ICON_FREEFORM, I18n.tr("freeform")),
+            ("text", ICON_TEXT, I18n.tr("text")),
+        ]:
+            btn = GlassIconButton(svg, tip, size=self.BTN, icon_size=20)
+            btn.clicked.connect(
+                lambda checked, m=mode: self.mode_changed.emit(m))
+            self.mode_buttons[mode] = btn
+            layout.addWidget(btn)
+
+        self.btn_close = GlassIconButton(
+            ICON_CLOSE, I18n.tr("close"), size=self.BTN, icon_size=20,
+            hover_color="#e03131", hover_bg_color=QColor(224, 49, 49))
+        self.btn_close.clicked.connect(self.close_clicked.emit)
+        layout.addWidget(self.btn_close)
+
+        self.setFixedWidth(10 + self.BTN * 4 + 8 * 3 + 10)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        paint_pill(painter, self.rect(), self.RADIUS)
+
+        # Selection plate gliding behind the active mode button. The mode
+        # buttons are transparent (never set_active), so this plate shows
+        # through them and slides linearly with slow-fast-slow easing.
+        margin = 10
+        spacing = 8
+        top = 6
+        x = int(margin + self._slide * (self.BTN + spacing))
+        slider = QRect(x, top, self.BTN, self.BTN)
+        if slider.intersects(self.rect()):
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setPen(Qt.NoPen)
+            hl = QApplication.palette().color(QPalette.Highlight)
+            painter.setBrush(
+                QColor(hl.red(), hl.green(), hl.blue(), 150))
+            painter.drawRoundedRect(slider, self.BTN // 3, self.BTN // 3)
+
+
 class AnnotationOverlay(BaseOverlay):
     """Screen annotation overlay with rectangle, freeform, and text tools"""
     finished = Signal()
@@ -100,100 +176,27 @@ class AnnotationOverlay(BaseOverlay):
         self.text_editor = None  # active inline text editor
         self._text_edit_idx = None  # index of text annotation being edited, None for new
         self._drag_start = None  # start point of current drag (like screenshot approach)
+        # Per-annotation corner controls: delete (red X) + drag handle (grip).
+        self._delete_rects = {}
+        self._drag_rects = {}
+        self._drag_ann_idx = None  # annotation currently being moved
+        self._drag_offset = None   # grab point offset from the annotation origin
+        self._last_drag_pos = None
         self.activateWindow()
         self.setFocus()
         self.setup_toolbar()
 
     def setup_toolbar(self):
-        """Create floating annotation mode toolbar using system palette colors"""
-        bg = QApplication.palette().color(QPalette.Window)
-        hl = QApplication.palette().color(QPalette.Highlight)
-
-        self.toolbar = QWidget(self)
-        self.toolbar.setStyleSheet(f"""
-            QWidget {{
-                background-color: rgba({bg.red()}, {bg.green()}, {bg.blue()}, 230);
-                border: 1px solid rgba({hl.red()}, {hl.green()}, {hl.blue()}, 60);
-                border-radius: 24px;
-            }}
-            QPushButton {{
-                background-color: transparent;
-                border: none;
-                border-radius: 8px;
-                padding: 4px;
-            }}
-            QPushButton:hover {{
-                background-color: rgba({hl.red()}, {hl.green()}, {hl.blue()}, 50);
-            }}
-            QPushButton:checked {{
-                background-color: rgba({hl.red()}, {hl.green()}, {hl.blue()}, 150);
-            }}
-        """)
-
-        layout = QHBoxLayout(self.toolbar)
-        layout.setSpacing(8)
-        layout.setContentsMargins(12, 5, 12, 5)
-
-        self.mode_buttons = {}
-        for mode, icon_name, tip in [
-            ("rectangle", "rectangle", I18n.tr("rectangle")),
-            ("freeform", "freeform", I18n.tr("freeform")),
-            ("text", "text", I18n.tr("text")),
-        ]:
-            btn = QPushButton()
-            btn.setToolTip(tip)
-            btn.setFixedSize(38, 38)
-            btn.setCheckable(True)
-            btn.setCursor(Qt.PointingHandCursor)
-            svg = ICON_RECTANGLE if mode == "rectangle" else \
-                  ICON_FREEFORM if mode == "freeform" else \
-                  ICON_TEXT
-            normal_color = _system_color("normal")
-            accent_color = _system_color("accent")
-            btn.setProperty("svg", svg)
-            btn.setProperty("normal_color", normal_color)
-            btn.setProperty("accent_color", accent_color)
-            btn.setIcon(_make_icon(svg, normal_color, 20))
-            btn.setIconSize(QSize(20, 20))
-            btn.clicked.connect(lambda checked, m=mode: self._set_mode(m))
-            self.mode_buttons[mode] = btn
-            layout.addWidget(btn)
-
-        self.mode_buttons["rectangle"].setChecked(True)
-
-        # Close button (same style as capsule close button)
-        self.btn_close = QPushButton()
-        self.btn_close.setToolTip(I18n.tr("close"))
-        self.btn_close.setFixedSize(38, 38)
-        self.btn_close.setCursor(Qt.PointingHandCursor)
-        self.btn_close.setIcon(_make_icon(ICON_CLOSE, _system_color("normal"), 20))
-        self.btn_close.setIconSize(QSize(20, 20))
-        self.btn_close.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                border: none;
-                border-radius: 8px;
-            }}
-            QPushButton:hover {{
-                background-color: rgba(224, 49, 49, 80);
-            }}
-        """)
-        self.btn_close.enterEvent = lambda e: self._on_close_enter()
-        self.btn_close.leaveEvent = lambda e: self._on_close_leave()
-        self.btn_close.clicked.connect(self._on_close_clicked)
-        layout.addWidget(self.btn_close)
+        """Create the floating annotation sub-bar (same pill style as capsule)."""
+        self.toolbar = AnnotationToolbar(self)
+        self.toolbar.mode_changed.connect(self._set_mode)
+        self.toolbar.close_clicked.connect(self._on_close_clicked)
 
         screen = QGuiApplication.primaryScreen().availableGeometry()
-        tw = 12 + 38 + 8 + 38 + 8 + 38 + 8 + 38 + 12  # 200
+        tw = self.toolbar.width()
         tx = (screen.width() - tw) // 2
-        self.toolbar.setGeometry(int(tx), 60, int(tw), 48)
+        self.toolbar.setGeometry(int(tx), 60, tw, AnnotationToolbar.BAR_H)
         self.toolbar.show()
-
-    def _on_close_enter(self):
-        self.btn_close.setIcon(_make_icon(ICON_CLOSE, "#e03131", 20))
-
-    def _on_close_leave(self):
-        self.btn_close.setIcon(_make_icon(ICON_CLOSE, _system_color("normal"), 20))
 
     def _on_close_clicked(self):
         self.finished.emit()
@@ -201,13 +204,7 @@ class AnnotationOverlay(BaseOverlay):
 
     def _set_mode(self, mode):
         self.current_mode = mode
-        for m, btn in self.mode_buttons.items():
-            btn.setChecked(m == mode)
-            svg = btn.property("svg")
-            if m == mode:
-                btn.setIcon(_make_icon(svg, btn.property("accent_color"), 20))
-            else:
-                btn.setIcon(_make_icon(svg, btn.property("normal_color"), 20))
+        self.toolbar.set_selected(mode)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -234,7 +231,7 @@ class AnnotationOverlay(BaseOverlay):
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(rect)
             if not is_temp:
-                self._draw_delete_button(painter, rect.topRight(), rect)
+                self._draw_handles(painter, rect.topRight(), rect)
 
         elif ann_type == "freeform":
             points = ann[1]
@@ -248,7 +245,7 @@ class AnnotationOverlay(BaseOverlay):
             painter.drawPath(path)
             if not is_temp:
                 bounds = path.boundingRect().toRect()
-                self._draw_delete_button(painter, bounds.topRight(), bounds)
+                self._draw_handles(painter, bounds.topRight(), bounds)
 
         elif ann_type == "text":
             rect = ann[1]
@@ -262,59 +259,92 @@ class AnnotationOverlay(BaseOverlay):
                 painter.setFont(QFont("Segoe UI", 14))
                 painter.setPen(QColor(255, 255, 255))
                 painter.drawText(rect.adjusted(6, 6, -6, -6), Qt.AlignLeft | Qt.AlignTop, text)
-                self._draw_delete_button(painter, rect.topRight(), rect)
+                self._draw_handles(painter, rect.topRight(), rect)
 
-    def _delete_button_rect(self, top_right, annotation_rect):
-        """Compute delete button position, clamping to visible area.
-        If too close to top edge, places button below the annotation instead."""
-        btn_size = 16
+    def _handle_rects(self, top_right, annotation_rect):
+        """Layout the two corner controls of an annotation, top-right:
+           [drag grip] [delete]. Clamped to screen — if the corner is too
+           close to the top edge, both controls drop below the annotation."""
+        btn_size = 18
+        spacing = 4
         margin = 4
         x = top_right.x() + margin
         y = top_right.y() - btn_size - margin
         if y < 0:
-            # Place below the annotation rect instead
             y = annotation_rect.bottom() + margin
-        return QRect(int(x), int(y), btn_size, btn_size)
+        delete_rect = QRect(int(x), int(y), btn_size, btn_size)
+        drag_rect = QRect(int(x - btn_size - spacing), int(y), btn_size, btn_size)
+        return drag_rect, delete_rect
 
-    def _draw_delete_button(self, painter, top_right, annotation_rect):
-        btn_rect = self._delete_button_rect(top_right, annotation_rect)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(239, 68, 68, 200))
-        painter.drawRoundedRect(btn_rect, 3, 3)
-        painter.setPen(QPen(QColor(255, 255, 255), 2))
-        painter.drawLine(btn_rect.topLeft() + QPoint(4, 4),
-                         btn_rect.bottomRight() - QPoint(4, 4))
-        painter.drawLine(btn_rect.topRight() + QPoint(-4, 4),
-                         btn_rect.bottomLeft() + QPoint(4, -4))
+    def _draw_handles(self, painter, top_right, annotation_rect):
+        """Draw a delete button (red circle + white X) and a drag handle
+        (translucent white circle + gray grip dots) at the annotation's
+        top-right corner. Records both hit rects for mouse handling."""
+        drag_rect, delete_rect = self._handle_rects(top_right, annotation_rect)
         ann_key = id(annotation_rect)
-        if not hasattr(self, '_delete_rects'):
-            self._delete_rects = {}
-        self._delete_rects[ann_key] = btn_rect
+        self._delete_rects[ann_key] = delete_rect
+        self._drag_rects[ann_key] = drag_rect
+
+        painter.setRenderHint(QPainter.Antialiasing)
+        # --- delete: red circle + white X, subtle white ring ---
+        painter.setPen(QPen(QColor(255, 255, 255, 120), 1))
+        painter.setBrush(QColor(239, 68, 68, 235))
+        painter.drawEllipse(delete_rect)
+        xpen = QPen(QColor(255, 255, 255), 2)
+        xpen.setCapStyle(Qt.RoundCap)
+        painter.setPen(xpen)
+        ins = 5
+        painter.drawLine(delete_rect.topLeft() + QPoint(ins, ins),
+                         delete_rect.bottomRight() - QPoint(ins, ins))
+        painter.drawLine(delete_rect.topRight() + QPoint(-ins, ins),
+                         delete_rect.bottomLeft() + QPoint(ins, -ins))
+        # --- drag: translucent white circle + gray grip grid ---
+        painter.setPen(QPen(QColor(255, 255, 255, 120), 1))
+        painter.setBrush(QColor(255, 255, 255, 190))
+        painter.drawEllipse(drag_rect)
+        gpen = QPen(QColor(90, 90, 90, 230), 1)
+        gpen.setCapStyle(Qt.FlatCap)
+        painter.setPen(gpen)
+        painter.setBrush(Qt.NoBrush)
+        cx, cy = drag_rect.center().x(), drag_rect.center().y()
+        radius = 2.2
+        for dx in (-3, 0, 3):
+            for dy in (-3, 3):
+                painter.drawEllipse(QPointF(cx + dx, cy + dy), radius, radius)
 
     def _get_delete_rects(self):
-        if not hasattr(self, '_delete_rects'):
-            self._delete_rects = {}
         result = {}
         for i, ann in enumerate(self.annotations):
-            ann_type = ann[0]
-            if ann_type == "rectangle":
-                rect = ann[1]
-                key = id(rect)
-                if key in self._delete_rects:
-                    result[i] = self._delete_rects[key]
-            elif ann_type == "freeform":
-                points = ann[1]
-                if len(points) >= 2:
-                    path = QPainterPath()
-                    path.moveTo(points[0])
-                    for pt in points[1:]:
-                        path.lineTo(pt)
-                    bounds = path.boundingRect().toRect()
-                    result[i] = self._delete_button_rect(bounds.topRight(), bounds)
-            elif ann_type == "text":
-                rect = ann[1]
-                result[i] = self._delete_button_rect(rect.topRight(), rect)
+            corner = self._annotation_corner(ann)
+            if corner is not None:
+                result[i] = self._handle_rects(*corner)[1]
         return result
+
+    def _get_drag_rects(self):
+        result = {}
+        for i, ann in enumerate(self.annotations):
+            corner = self._annotation_corner(ann)
+            if corner is not None:
+                result[i] = self._handle_rects(*corner)[0]
+        return result
+
+    def _annotation_corner(self, ann):
+        """Return (top_right, annotation_rect) for a stored annotation,
+        or None if it has no usable geometry."""
+        ann_type = ann[0]
+        if ann_type in ("rectangle", "text"):
+            rect = ann[1]
+            return (rect.topRight(), rect)
+        if ann_type == "freeform":
+            points = ann[1]
+            if len(points) >= 2:
+                path = QPainterPath()
+                path.moveTo(points[0])
+                for pt in points[1:]:
+                    path.lineTo(pt)
+                bounds = path.boundingRect().toRect()
+                return (bounds.topRight(), bounds)
+        return None
 
     def _is_text_double_click(self, pos):
         """Check if position is inside an existing text annotation (for double-click edit)"""
@@ -336,8 +366,23 @@ class AnnotationOverlay(BaseOverlay):
                     self._finish_text_edit()
                     self.annotations.pop(idx)
                     self._delete_rects = {}
+                    self._drag_rects = {}
                     self.update()
                     return
+
+            # Drag handle: grab an existing annotation to move it.
+            if self._drag_ann_idx is None:
+                for idx, rect in self._get_drag_rects().items():
+                    if rect.contains(pos):
+                        self._finish_text_edit()
+                        ann = self.annotations[idx]
+                        ref = (ann[1][0] if ann[0] == "freeform"
+                               else ann[1].topLeft())
+                        self._drag_ann_idx = idx
+                        self._drag_offset = pos - ref
+                        self._last_drag_pos = pos
+                        self.update()
+                        return
 
             # If text editor is active and user clicks outside it, finish editing
             if self.text_editor:
@@ -374,6 +419,22 @@ class AnnotationOverlay(BaseOverlay):
         super().mouseDoubleClickEvent(event)
 
     def mouseMoveEvent(self, event):
+        # Dragging an existing annotation through its grip handle.
+        if self._drag_ann_idx is not None and self._last_drag_pos is not None:
+            pos = event.position().toPoint()
+            ann = self.annotations[self._drag_ann_idx]
+            if ann[0] == "freeform":
+                delta = pos - self._last_drag_pos
+                pts = ann[1]  # translate the shared list in place (tuple-immutable)
+                pts[:] = [pt + delta for pt in pts]
+                self._last_drag_pos = pos
+            else:
+                ann[1].moveTopLeft(pos - self._drag_offset)
+            self._drag_rects = {}
+            self._delete_rects = {}
+            self.update()
+            return
+
         if self.is_drawing and self._drag_start and self.current_shape:
             pos = event.position().toPoint()
             if self.current_mode == "rectangle":
@@ -386,6 +447,16 @@ class AnnotationOverlay(BaseOverlay):
             self.update()
 
     def mouseReleaseEvent(self, event):
+        # Finish an annotation move started from the grip handle.
+        if event.button() == Qt.LeftButton and self._drag_ann_idx is not None:
+            self._drag_ann_idx = None
+            self._drag_offset = None
+            self._last_drag_pos = None
+            self._drag_rects = {}
+            self._delete_rects = {}
+            self.update()
+            return
+
         if event.button() == Qt.LeftButton and self.is_drawing:
             self.is_drawing = False
             if self.current_shape:

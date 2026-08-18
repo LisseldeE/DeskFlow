@@ -1,16 +1,12 @@
 from ctypes import wintypes
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QPushButton, QGraphicsDropShadowEffect, QApplication
+    QWidget, QHBoxLayout, QGraphicsDropShadowEffect, QApplication
 )
 from PySide6.QtCore import (
-    Qt, QPoint, QSize, QPropertyAnimation, QEasingCurve, QEvent,
-    QByteArray, QAbstractNativeEventFilter, Signal
+    Qt, QPoint, QPropertyAnimation, QEasingCurve, QEvent,
+    QAbstractNativeEventFilter, Signal
 )
-from PySide6.QtGui import (
-    QPainter, QColor, QPen, QPixmap, QIcon, QGuiApplication, QPalette,
-    QKeyEvent, QCursor
-)
-from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtGui import QPainter, QColor, QGuiApplication, QKeyEvent, QCursor
 from modules.icons import (
     ICON_SCREENSHOT, ICON_ANNOTATION, ICON_TRANSLATE, ICON_SETTINGS,
     ICON_CLOSE, ICON_CLIPBOARD
@@ -18,28 +14,11 @@ from modules.icons import (
 from modules.i18n import I18n
 from modules.family import FamilyWindowRegistry
 from modules.global_mouse_hook import GlobalMouseHook
+from modules.widgets import GlassIconButton, paint_pill
 
 # Windows constants
 WM_KEYDOWN = 0x0100
 VK_ESCAPE = 0x1B
-
-
-def _system_color(role):
-    """Get a system palette color as hex string"""
-    c = QApplication.palette().color(role)
-    return f"#{c.red():02x}{c.green():02x}{c.blue():02x}"
-
-
-def _make_icon(svg_content, color="#555555", size=22):
-    """Create QIcon from SVG string with color substitution"""
-    colored = svg_content.replace('stroke="currentColor"', f'stroke="{color}"')
-    renderer = QSvgRenderer(QByteArray(colored.encode()))
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.transparent)
-    painter = QPainter(pixmap)
-    renderer.render(painter)
-    painter.end()
-    return QIcon(pixmap)
 
 
 class CapsuleNativeFilter(QAbstractNativeEventFilter):
@@ -61,102 +40,6 @@ class CapsuleNativeFilter(QAbstractNativeEventFilter):
                     self.capsule.force_family_hide()
                     return True, 0
         return False, 0
-
-
-class AnimatedIconButton(QPushButton):
-    """Button with SVG icon, hover effect, press-down animation, and an
-    optional persistent "active" state (lit background) for toggle buttons.
-
-    Emits `rightClicked` on right-click (used by the clipboard button to
-    open the room config)."""
-
-    rightClicked = Signal()
-
-    def __init__(self, svg_content, tooltip="", hover_color=None,
-                 hover_bg_color=None, parent=None):
-        super().__init__(parent)
-        self._svg = svg_content
-        self._normal_color = _system_color(QPalette.WindowText)
-        self._hover_color = hover_color or _system_color(QPalette.Highlight)
-        self._hover_bg = hover_bg_color or QApplication.palette().color(QPalette.Highlight)
-        self._original_pos = None
-        self._is_pressed = False
-        self._active = False
-
-        self.setToolTip(tooltip)
-        self.setFixedSize(44, 44)
-        self.setCursor(Qt.PointingHandCursor)
-        # Suppress the default context menu so right-click is ours alone.
-        self.setContextMenuPolicy(Qt.PreventContextMenu)
-        self.setIcon(_make_icon(svg_content, self._normal_color))
-        self.setIconSize(QSize(22, 22))
-        self._apply_style()
-
-    def _apply_style(self):
-        h = self._hover_bg
-        if self._active:
-            base = f"rgba({h.red()}, {h.green()}, {h.blue()}, 75)"
-            hover = f"rgba({h.red()}, {h.green()}, {h.blue()}, 115)"
-        else:
-            base = "transparent"
-            hover = f"rgba({h.red()}, {h.green()}, {h.blue()}, 50)"
-        self.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {base};
-                border: none;
-                border-radius: 8px;
-            }}
-            QPushButton:hover {{
-                background-color: {hover};
-            }}
-        """)
-
-    def set_active(self, active):
-        """Persistent lit background to indicate a toggle is ON."""
-        self._active = bool(active)
-        self._apply_style()
-
-    def enterEvent(self, event):
-        self.setIcon(_make_icon(self._svg, self._hover_color))
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        if not self._is_pressed:
-            self.setIcon(_make_icon(self._svg, self._normal_color))
-        super().leaveEvent(event)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.RightButton:
-            self.rightClicked.emit()
-            return
-        if event.button() == Qt.LeftButton:
-            self._original_pos = self.pos()
-            self._is_pressed = True
-            super().mousePressEvent(event)
-            if self._original_pos:
-                self.move(int(self._original_pos.x()),
-                          int(self._original_pos.y() + 1))
-        else:
-            super().mousePressEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self._is_pressed = False
-            if self._original_pos is not None:
-                self.move(self._original_pos)
-            if self.underMouse():
-                self.setIcon(_make_icon(self._svg, self._hover_color))
-            else:
-                self.setIcon(_make_icon(self._svg, self._normal_color))
-            super().mouseReleaseEvent(event)
-        else:
-            super().mouseReleaseEvent(event)
-
-    def event(self, event):
-        if event.type() == QEvent.LayoutRequest:
-            if not self._is_pressed:
-                self._original_pos = None
-        return super().event(event)
 
 
 class CapsuleBar(QWidget):
@@ -209,27 +92,27 @@ class CapsuleBar(QWidget):
         layout.setSpacing(10)
         layout.setContentsMargins(14, 6, 14, 6)
 
-        self.btn_screenshot = AnimatedIconButton(
+        self.btn_screenshot = GlassIconButton(
             ICON_SCREENSHOT, I18n.tr("screenshot"))
         layout.addWidget(self.btn_screenshot)
 
-        self.btn_annotation = AnimatedIconButton(
+        self.btn_annotation = GlassIconButton(
             ICON_ANNOTATION, I18n.tr("annotation"))
         layout.addWidget(self.btn_annotation)
 
-        self.btn_translate = AnimatedIconButton(
+        self.btn_translate = GlassIconButton(
             ICON_TRANSLATE, I18n.tr("translate"))
         layout.addWidget(self.btn_translate)
 
-        self.btn_clipboard = AnimatedIconButton(
+        self.btn_clipboard = GlassIconButton(
             ICON_CLIPBOARD, I18n.tr("clipboard"))
         layout.addWidget(self.btn_clipboard)
 
-        self.btn_settings = AnimatedIconButton(
+        self.btn_settings = GlassIconButton(
             ICON_SETTINGS, I18n.tr("settings"))
         layout.addWidget(self.btn_settings)
 
-        self.btn_close = AnimatedIconButton(
+        self.btn_close = GlassIconButton(
             ICON_CLOSE, I18n.tr("close"),
             hover_color="#e03131",
             hover_bg_color=QColor(224, 49, 49)
@@ -254,20 +137,10 @@ class CapsuleBar(QWidget):
         self.opacity_anim.setEasingCurve(QEasingCurve.OutCubic)
 
     def paintEvent(self, event):
+        # Shared pill look (gradient body + family hairline) so the capsule
+        # and the annotation sub-bar read as one design family.
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        # Opaque background (alpha=255) — readability over translucency.
-        bg = self.palette().color(QPalette.Window)
-        bg.setAlpha(255)
-        painter.setBrush(bg)
-        painter.setPen(Qt.NoPen)
-        painter.drawRoundedRect(self.rect(), 28, 28)
-        # 1px dark gray border. Darker than palette.Mid so it reads on both
-        # light and dark themes without being as jarring as pure white.
-        # RGB(80,80,80) ≈ #505050 — neutral, mid-dark.
-        painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(QColor(80, 80, 80, 255), 1))
-        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 28, 28)
+        paint_pill(painter, self.rect(), 28)
 
     def showEvent(self, event):
         # Native HWND may (re)create on show — refresh the registry and apply
