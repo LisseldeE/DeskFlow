@@ -17,6 +17,7 @@ TRANSLATIONS = {
         "freeform": "自由形状",
         "text": "文字框",
         "delete": "删除",
+        "color": "颜色",
         "show": "显示",
         "exit": "退出",
         "app_name": "DeskFlow",
@@ -57,6 +58,25 @@ TRANSLATIONS = {
         "translate_failed": "翻译失败",
         "copied": "已复制",
         "translate_target_lang": "目标语言",
+        "translate_source_hint": "识别到的文字将翻译为所选目标语言。翻译使用在线接口，需要网络连接。",
+        # Settings sidebar
+        "settings_general": "常规",
+        "settings_translate": "翻译",
+        "settings_system": "系统",
+        "settings_about": "关于",
+        # About / check for update
+        "ok": "确定",
+        "about_version_label": "版本",
+        "about_author": "作者",
+        "about_check_update": "检查更新",
+        "about_no_tags": "未找到版本信息",
+        "about_parse_error": "无法解析当前版本号",
+        "about_new_version": "发现新版本 {version}，是否前往下载？",
+        "about_latest": "已是最新版本",
+        "about_yes": "是",
+        "about_no": "否",
+        "about_network_error": "网络连接失败：{error}",
+        "about_check_failed": "检查更新失败：{error}",
     },
     "en": {
         "screenshot": "Screenshot",
@@ -73,6 +93,7 @@ TRANSLATIONS = {
         "freeform": "Freeform",
         "text": "Text",
         "delete": "Delete",
+        "color": "Color",
         "show": "Show",
         "exit": "Exit",
         "app_name": "DeskFlow",
@@ -113,6 +134,25 @@ TRANSLATIONS = {
         "translate_failed": "Translation failed",
         "copied": "Copied",
         "translate_target_lang": "Target language",
+        "translate_source_hint": "Recognized text is translated to the chosen target language. Translation uses an online service and requires a network connection.",
+        # Settings sidebar
+        "settings_general": "General",
+        "settings_translate": "Translate",
+        "settings_system": "System",
+        "settings_about": "About",
+        # About / check for update
+        "ok": "OK",
+        "about_version_label": "Version",
+        "about_author": "Author",
+        "about_check_update": "Check for Updates",
+        "about_no_tags": "No version tags found",
+        "about_parse_error": "Cannot parse current version",
+        "about_new_version": "New version {version} found. Download?",
+        "about_latest": "Already the latest version",
+        "about_yes": "Yes",
+        "about_no": "No",
+        "about_network_error": "Network error: {error}",
+        "about_check_failed": "Update check failed: {error}",
     }
 }
 
@@ -142,5 +182,11 @@ class I18n:
         Config().set("language", lang)
 
     @classmethod
-    def tr(cls, key):
-        return TRANSLATIONS.get(cls.get_language(), {}).get(key, key)
+    def tr(cls, key, **kwargs):
+        text = TRANSLATIONS.get(cls.get_language(), {}).get(key, key)
+        if kwargs:
+            try:
+                return text.format(**kwargs)
+            except (KeyError, IndexError):
+                return text
+        return text

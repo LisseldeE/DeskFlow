@@ -4,6 +4,7 @@ Main entry point: Ctrl+` to call, capsule UI with multiple tools
 """
 import sys
 import os
+import ctypes
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon
 from PySide6.QtCore import Qt
@@ -16,6 +17,21 @@ from modules.annotation import AnnotationOverlay
 from modules.translate import TranslateOverlay
 from modules.settings import SettingsDialog, apply_autostart
 from modules.clipboard_manager import ClipboardManager
+
+
+def set_app_user_model_id():
+    """Set the Windows AppUserModelID so the taskbar groups the window with
+    the tray icon under DeskFlow instead of the generic python icon.
+
+    Must run before the QApplication (i.e. before any window) is created,
+    mirroring icon_set.md. Safe no-op on non-Windows / when it fails."""
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "LisseldeE.DeskFlow.Version")
+    except Exception:
+        pass
 
 
 def load_app_icon():
@@ -41,9 +57,14 @@ class DeskFlowApp:
     """Main application managing tray, hotkey, capsule, and overlays"""
 
     def __init__(self):
+        # Set the AppUserModelID before any window / QApplication exists so
+        # the taskbar shows the DeskFlow icon. Mirrors icon_set.md.
+        set_app_user_model_id()
+
         self.app = QApplication(sys.argv)
         self.app.setQuitOnLastWindowClosed(False)
         self.app.setApplicationName("DeskFlow")
+        self.app.setWindowIcon(load_app_icon())
 
         Config()
         I18n.get_language()

@@ -94,7 +94,8 @@ class GlassIconButton(QPushButton):
     rightClicked = Signal()
 
     def __init__(self, svg_content, tooltip="", size=44, icon_size=22,
-                 hover_color=None, hover_bg_color=None, parent=None):
+                 hover_color=None, hover_bg_color=None, colorize_icon=True,
+                 parent=None):
         super().__init__(parent)
         self._svg = svg_content
         self._size = size
@@ -104,6 +105,10 @@ class GlassIconButton(QPushButton):
         self._hover_bg = hover_bg_color or \
             QApplication.palette().color(QPalette.Highlight)
         self._icon_size = icon_size
+        # When False the SVG icon keeps its original "window text" color under
+        # hover/press too — only the background plate animates. Used by the
+        # capsule so its icons never take on the accent tint.
+        self._colorize_icon = bool(colorize_icon)
         self._original_pos = None
         self._is_pressed = False
         self._active = False
@@ -160,7 +165,10 @@ class GlassIconButton(QPushButton):
             self._icon_color = self._normal
         else:
             self._alpha = int(self.HOVER_ALPHA * self._t)
-            self._icon_color = _blend(self._normal, self._hover, self._t)
+            if self._colorize_icon:
+                self._icon_color = _blend(self._normal, self._hover, self._t)
+            else:
+                self._icon_color = self._normal
         self.update()
 
     def set_active(self, active):

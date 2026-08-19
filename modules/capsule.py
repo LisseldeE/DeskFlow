@@ -92,30 +92,33 @@ class CapsuleBar(QWidget):
         layout.setSpacing(10)
         layout.setContentsMargins(14, 6, 14, 6)
 
+        # All capsule icons must keep their original colour on hover (task 1):
+        # only the translucent plate animates, never a colour tint on the SVG.
         self.btn_screenshot = GlassIconButton(
-            ICON_SCREENSHOT, I18n.tr("screenshot"))
+            ICON_SCREENSHOT, I18n.tr("screenshot"), colorize_icon=False)
         layout.addWidget(self.btn_screenshot)
 
         self.btn_annotation = GlassIconButton(
-            ICON_ANNOTATION, I18n.tr("annotation"))
+            ICON_ANNOTATION, I18n.tr("annotation"), colorize_icon=False)
         layout.addWidget(self.btn_annotation)
 
         self.btn_translate = GlassIconButton(
-            ICON_TRANSLATE, I18n.tr("translate"))
+            ICON_TRANSLATE, I18n.tr("translate"), colorize_icon=False)
         layout.addWidget(self.btn_translate)
 
         self.btn_clipboard = GlassIconButton(
-            ICON_CLIPBOARD, I18n.tr("clipboard"))
+            ICON_CLIPBOARD, I18n.tr("clipboard"), colorize_icon=False)
         layout.addWidget(self.btn_clipboard)
 
         self.btn_settings = GlassIconButton(
-            ICON_SETTINGS, I18n.tr("settings"))
+            ICON_SETTINGS, I18n.tr("settings"), colorize_icon=False)
         layout.addWidget(self.btn_settings)
 
         self.btn_close = GlassIconButton(
             ICON_CLOSE, I18n.tr("close"),
             hover_color="#e03131",
-            hover_bg_color=QColor(224, 49, 49)
+            hover_bg_color=QColor(224, 49, 49),
+            colorize_icon=False
         )
         layout.addWidget(self.btn_close)
 

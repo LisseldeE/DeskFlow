@@ -1,12 +1,14 @@
+import math
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QTextEdit, QApplication, QGraphicsDropShadowEffect
+    QWidget, QHBoxLayout, QTextEdit, QApplication, QGraphicsDropShadowEffect,
+    QPushButton, QFrame
 )
 from PySide6.QtCore import (
-    Qt, QRect, QPoint, QPointF, Signal, QVariantAnimation, QEasingCurve
+    Qt, QRect, QRectF, QPoint, QPointF, Signal, QVariantAnimation, QEasingCurve
 )
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QFont, QGuiApplication, QFontMetrics,
-    QPainterPath, QPalette, QBrush, QKeyEvent
+    QPainterPath, QPalette, QBrush, QKeyEvent, QImage
 )
 from modules.overlay import BaseOverlay
 from modules.icons import ICON_RECTANGLE, ICON_FREEFORM, ICON_TEXT, ICON_CLOSE
@@ -14,12 +16,107 @@ from modules.i18n import I18n
 from modules.widgets import GlassIconButton, paint_pill
 
 
-def _annotation_border_color():
-    """Return border color for annotation shapes based on theme.
-    Dark mode -> light gray, Light mode -> dark gray."""
-    bg = QApplication.palette().color(QPalette.Window)
-    is_dark = bg.lightness() < 128
-    return QColor(200, 200, 200) if is_dark else QColor(80, 80, 80)
+# Annotation drawing colours: white, black, and the standard seven colours.
+# The toolbar shows these as a swatch picker; white is the default.
+ANNOTATION_COLORS = {
+    "white": "#ffffff",
+    "black": "#000000",
+    "red": "#ff3b30",
+    "orange": "#ff9500",
+    "yellow": "#ffcc00",
+    "green": "#34c759",
+    "blue": "#007aff",
+    "indigo": "#5856d6",
+    "purple": "#af52de",
+}
+ANNOTATION_COLOR_ORDER = [
+    "white", "black", "red", "orange", "yellow",
+    "green", "blue", "indigo", "purple",
+]
+
+
+def _accent():
+    hl = QApplication.palette().color(QPalette.Highlight)
+    return hl
+
+
+class ColorButton(QPushButton):
+    """Round toolbar button displaying the current annotation color.
+
+    Hover grows a translucent accent ring (the same 180 ms language as the
+    GlassIconButton) so it reads as part of the annotation pill family."""
+
+    def __init__(self, color="#ffffff", parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(I18n.tr("color"))
+        self.setFlat(True)
+        self.setFocusPolicy(Qt.NoFocus)
+        self._color = QColor(color)
+        self._t = 0.0
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(180)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim.valueChanged.connect(self._on_anim)
+
+    def set_color(self, color):
+        self._color = QColor(color)
+        self.update()
+
+    def animation_color(self):
+        return self._color
+
+    def _on_anim(self, v):
+        self._t = float(v)
+        self.update()
+
+    def enterEvent(self, e):
+        self._anim.stop()
+        self._anim.setStartValue(self._t)
+        self._anim.setEndValue(1.0)
+        self._anim.start()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._anim.stop()
+        self._anim.setStartValue(self._t)
+        self._anim.setEndValue(0.0)
+        self._anim.start()
+        super().leaveEvent(e)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        side = min(self.width(), self.height())
+        cx, cy = self.width() / 2.0, self.height() / 2.0
+        # Hover ring behind the swatch.
+        if self._t > 0:
+            hl = _accent()
+            r = side / 2.0 - 1
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(hl.red(), hl.green(), hl.blue(),
+                              int(46 * self._t)))
+            p.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
+        # The swatch itself.
+        r = side / 2.0 - 6
+        p.setPen(QPen(QColor(128, 128, 128, 130), 1))
+        p.setBrush(self._color)
+        p.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
+        p.end()
+
+
+class ColorStripArea(QWidget):
+    """Leading spacer of the annotation toolbar that hosts the color swatches.
+
+    Grows 0 -> SW_EXT as the capsule extends leftward, pushing the control
+    buttons along with it. It is transparent to mouse events, so clicks pass
+    straight through to the toolbar, which hit-tests the swatch rects in its
+    own paint coordinates."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setFixedWidth(0)
 
 
 class TextEditWidget(QTextEdit):
@@ -65,7 +162,11 @@ class TextEditWidget(QTextEdit):
 
 
 class AnnotationToolbar(QWidget):
-    """Floating annotation sub-bar: mode buttons + close.
+    """Floating annotation sub-bar: color selector + mode buttons + close.
+
+    Clicking the color button extends the capsule LEFTWARD into a long row
+    of color swatches (the ColorStripArea leading spacer grows), and it
+    collapses back once a color is picked (or the button is toggled again).
 
     Painted with the same pill look as the capsule bar (shared paint_pill),
     so both read as one design family; floats over the dark overlay with a
@@ -73,10 +174,21 @@ class AnnotationToolbar(QWidget):
 
     mode_changed = Signal(str)
     close_clicked = Signal()
+    color_selected = Signal(str)  # emits the new annotation color hex
 
     BTN = 40
     RADIUS = 26
     BAR_H = 52
+
+    # Swatch strip geometry (horizontal row, left-to-right).
+    SW = 30
+    GAP = 8
+    SW_PAD = 6
+    SW_EXT = SW_PAD + len(ANNOTATION_COLOR_ORDER) * (SW + GAP)
+
+    # Collapsed width incl. the leading strip (even at 0px it adds one
+    # 8px spacing): 10|strip0|8|color40|8|div1|8|rect40|8|free40|8|text40|8|close40|10
+    BASE_W = 10 + 8 + BTN + 8 + 1 + 8 + BTN * 4 + 8 * 3 + 10
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -98,8 +210,136 @@ class AnnotationToolbar(QWidget):
         self._slide_anim.setEasingCurve(QEasingCurve.InOutCubic)
         self._slide_anim.valueChanged.connect(self._on_slide)
 
+        # Color strip expansion: 0 = collapsed, 1 = fully extended left.
+        self._ext = 0.0
+        self._sel_hex = ANNOTATION_COLORS["white"]
+        self._ext_anim = QVariantAnimation(self)
+        self._ext_anim.setDuration(250)
+        self._ext_anim.setEasingCurve(QEasingCurve.InOutCubic)
+        self._ext_anim.valueChanged.connect(self._on_ext)
+
+        # Per-swatch hover: each swatch owns an independent fade so a fast
+        # sweep lights them all up — no shared progress that stalls mid-flight
+        # because every state change was restarting the same animation. The
+        # colour behind the hovered swatch grows a translucent accent ring
+        # (same 180 ms language as the ColorButton ring).
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_Hover)
+        self._hover_idx = -1
+        self._hover_t = [0.0] * len(ANNOTATION_COLOR_ORDER)
+        self._hover_anims = []
+        for i in range(len(ANNOTATION_COLOR_ORDER)):
+            anim = QVariantAnimation(self)
+            anim.setDuration(180)
+            anim.setEasingCurve(QEasingCurve.OutCubic)
+            anim.valueChanged.connect(lambda v, idx=i: self._set_hover_t(idx, v))
+            self._hover_anims.append(anim)
+
         self.setup_ui()
         self.set_selected("rectangle")
+
+    # ---- color strip expand / collapse ----
+
+    def _on_ext(self, value):
+        self._ext = float(value)
+        self._apply_ext()
+
+    def _apply_ext(self):
+        """Grow the leading strip + the toolbar, shifting x left so the
+        right (control) edge stays put — the bar extends to the LEFT."""
+        ext = int(self.SW_EXT * self._ext)
+        self._color_strip.setFixedWidth(ext)
+        new_w = self.BASE_W + ext
+        delta = new_w - self.width()
+        if delta:
+            self.setFixedWidth(new_w)
+            self.move(max(8, self.x() - delta), self.y())
+        self.update()
+
+    def toggle_color_strip(self):
+        if self._ext > 0.5:
+            self.collapse_color_strip()
+        else:
+            self.expand_color_strip()
+
+    def expand_color_strip(self):
+        if self._ext >= 1.0:
+            return
+        self._ext_anim.stop()
+        self._ext_anim.setStartValue(self._ext)
+        self._ext_anim.setEndValue(1.0)
+        self._ext_anim.start()
+
+    def collapse_color_strip(self):
+        if self._ext <= 0.0:
+            return
+        self._ext_anim.stop()
+        self._ext_anim.setStartValue(self._ext)
+        self._ext_anim.setEndValue(0.0)
+        self._ext_anim.start()
+
+    # ---- swatch geometry (toolbar-local coordinates) ----
+
+    def _swatch_rect(self, index):
+        # The strip is the first layout item, anchored at the left margin
+        # (10px). Swatches sit inside it, pushed PAST the layout margin.
+        x = 10 + self.SW_PAD + index * (self.SW + self.GAP)
+        y = (self.BAR_H - self.SW) / 2.0
+        return QRectF(x, y, self.SW, self.SW)
+
+    def _swatch_at(self, pos):
+        for i in range(len(ANNOTATION_COLOR_ORDER)):
+            if self._swatch_rect(i).contains(pos):
+                return i
+        return -1
+
+    # ---- swatch hover animation ----
+
+    def _set_hover_t(self, index, value):
+        self._hover_t[index] = float(value)
+        self.update()
+
+    def _set_hover(self, index):
+        """Fade the ring in on the newly hovered swatch while the previous
+        one fades out — each animates independently, so a fast sweep never
+        stalls by resuming a shared mid-flight value."""
+        prev = self._hover_idx
+        self._hover_idx = index
+        if prev >= 0 and prev != index:
+            self._run_hover(prev, 0.0)
+        if index >= 0:
+            self._run_hover(index, 1.0)
+        self.update()
+
+    def _run_hover(self, index, target):
+        anim = self._hover_anims[index]
+        anim.stop()
+        anim.setStartValue(self._hover_t[index])
+        anim.setEndValue(target)
+        anim.start()
+
+    def _hover_track(self, pos):
+        index = self._swatch_at(pos) if self._ext > 0.5 else -1
+        if index != self._hover_idx:
+            self._set_hover(index)
+        self.setCursor(Qt.PointingHandCursor if index >= 0 else Qt.ArrowCursor)
+        return index
+
+    def mouseMoveEvent(self, event):
+        self._hover_track(event.position())
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover_track(QPointF(-1, -1))
+        super().leaveEvent(event)
+
+    def _select_color_at(self, index):
+        key = ANNOTATION_COLOR_ORDER[index]
+        hex_color = ANNOTATION_COLORS[key]
+        self._sel_hex = hex_color
+        self.btn_color.set_color(hex_color)
+        self.color_selected.emit(hex_color)
+        self.collapse_color_strip()
 
     def set_selected(self, mode):
         """Glide the selection plate to the given mode's button position."""
@@ -115,20 +355,43 @@ class AnnotationToolbar(QWidget):
         self._slide = float(value)
         self.update()
 
+    def set_annotation_color(self, color):
+        self._sel_hex = color
+        self.btn_color.set_color(color)
+
     def setup_ui(self):
         layout = QHBoxLayout(self)
         layout.setSpacing(8)
         layout.setContentsMargins(10, 6, 10, 6)
 
+        # Leading spacer that hosts the color swatches. Grows on expand.
+        self._color_strip = ColorStripArea(self)
+        layout.addWidget(self._color_strip)
+
+        # --- color switch section, split from the modes by a "|" ---
+        self.btn_color = ColorButton(ANNOTATION_COLORS["white"], self)
+        self.btn_color.setFixedSize(self.BTN, self.BTN)
+        self.btn_color.clicked.connect(self.toggle_color_strip)
+        layout.addWidget(self.btn_color)
+
+        divider = QFrame(self)
+        divider.setFixedSize(1, self.BTN - 12)
+        divider.setStyleSheet(
+            "background: rgba(130,130,130,150); border-radius: 1px;")
+        layout.addWidget(divider)
+
+        # Mode buttons keep their original icon colour (only the shared slide
+        # plate highlights them), hence colorize_icon=False.
         self.mode_buttons = {}
         for mode, svg, tip in [
             ("rectangle", ICON_RECTANGLE, I18n.tr("rectangle")),
             ("freeform", ICON_FREEFORM, I18n.tr("freeform")),
             ("text", ICON_TEXT, I18n.tr("text")),
         ]:
-            btn = GlassIconButton(svg, tip, size=self.BTN, icon_size=20)
+            btn = GlassIconButton(svg, tip, size=self.BTN, icon_size=20,
+                                  colorize_icon=False)
             btn.clicked.connect(
-                lambda checked, m=mode: self.mode_changed.emit(m))
+                lambda checked, m=mode: self._on_mode_clicked(m))
             self.mode_buttons[mode] = btn
             layout.addWidget(btn)
 
@@ -138,26 +401,78 @@ class AnnotationToolbar(QWidget):
         self.btn_close.clicked.connect(self.close_clicked.emit)
         layout.addWidget(self.btn_close)
 
-        self.setFixedWidth(10 + self.BTN * 4 + 8 * 3 + 10)
+        self.setFixedWidth(self.BASE_W)
+
+    def _on_mode_clicked(self, mode):
+        # Picking a mode is a clear "done with colors" signal — collapse the
+        # strip so a stray open strip doesn't linger.
+        if self._ext > 0.5:
+            self.collapse_color_strip()
+        self.mode_changed.emit(mode)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._ext > 0.5:
+            idx = self._swatch_at(event.position())
+            if idx >= 0:
+                self._select_color_at(idx)
+                return
+        super().mousePressEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
         paint_pill(painter, self.rect(), self.RADIUS)
+
+        # --- color swatches revealed as the strip extends left ---
+        if self._ext > 0:
+            visible_ext = 10 + int(self.SW_EXT * self._ext)
+            painter.save()
+            painter.setOpacity(self._ext)
+            hl = _accent()
+            for i, key in enumerate(ANNOTATION_COLOR_ORDER):
+                rect = self._swatch_rect(i)
+                if rect.left() > visible_ext:
+                    break
+                cx, cy = rect.center().x(), rect.center().y()
+                color = QColor(ANNOTATION_COLORS[key])
+
+                # Hover halo: a translucent accent disc grows out from the
+                # swatch (radius & alpha both animate), read as a soft lift.
+                # Painted per-swatch so a fading-out neighbour keeps its glow
+                # while the newly hovered one fades in.
+                if self._hover_t[i] > 0:
+                    t = self._hover_t[i]
+                    hr = (rect.width() / 2.0 - 1) + 5 * t
+                    painter.setPen(Qt.NoPen)
+                    painter.setBrush(
+                        QColor(hl.red(), hl.green(), hl.blue(),
+                               int(46 * t)))
+                    painter.drawEllipse(QRectF(cx - hr, cy - hr, 2 * hr, 2 * hr))
+
+                sr = rect.width() / 2.0 - 1
+                painter.setPen(QPen(QColor(128, 128, 128, 130), 1))
+                painter.setBrush(color)
+                painter.drawEllipse(QRectF(cx - sr, cy - sr, 2 * sr, 2 * sr))
+
+                selected = (ANNOTATION_COLORS[key] == self._sel_hex)
+                if selected:
+                    painter.setPen(QPen(hl, 2))
+                    painter.setBrush(Qt.NoBrush)
+                    rr = rect.width() / 2.0
+                    painter.drawEllipse(QRectF(cx - rr, cy - rr, 2 * rr, 2 * rr))
+            painter.restore()
 
         # Selection plate gliding behind the active mode button. The mode
         # buttons are transparent (never set_active), so this plate shows
         # through them and slides linearly with slow-fast-slow easing.
-        margin = 10
         spacing = 8
-        top = 6
-        x = int(margin + self._slide * (self.BTN + spacing))
-        slider = QRect(x, top, self.BTN, self.BTN)
+        ms = self.btn_color.x() + self.BTN + 8 + 1 + 8  # where modes begin
+        x = int(ms + self._slide * (self.BTN + spacing))
+        slider = QRect(x, 6, self.BTN, self.BTN)
         if slider.intersects(self.rect()):
-            painter.setRenderHint(QPainter.Antialiasing)
             painter.setPen(Qt.NoPen)
             hl = QApplication.palette().color(QPalette.Highlight)
-            painter.setBrush(
-                QColor(hl.red(), hl.green(), hl.blue(), 150))
+            painter.setBrush(QColor(hl.red(), hl.green(), hl.blue(), 150))
             painter.drawRoundedRect(slider, self.BTN // 3, self.BTN // 3)
 
 
@@ -179,9 +494,12 @@ class AnnotationOverlay(BaseOverlay):
         # Per-annotation corner controls: delete (red X) + drag handle (grip).
         self._delete_rects = {}
         self._drag_rects = {}
+        self._glyph_cache = {}  # kind -> (pre-rendered QImage, ink_center_x, ink_center_y)
         self._drag_ann_idx = None  # annotation currently being moved
         self._drag_offset = None   # grab point offset from the annotation origin
         self._last_drag_pos = None
+        self.annotation_color = QColor(ANNOTATION_COLORS["white"])
+        self._pending_text_color = None  # colour captured when a text box is drawn
         self.activateWindow()
         self.setFocus()
         self.setup_toolbar()
@@ -191,12 +509,18 @@ class AnnotationOverlay(BaseOverlay):
         self.toolbar = AnnotationToolbar(self)
         self.toolbar.mode_changed.connect(self._set_mode)
         self.toolbar.close_clicked.connect(self._on_close_clicked)
+        self.toolbar.color_selected.connect(self._set_color)
 
         screen = QGuiApplication.primaryScreen().availableGeometry()
         tw = self.toolbar.width()
         tx = (screen.width() - tw) // 2
         self.toolbar.setGeometry(int(tx), 60, tw, AnnotationToolbar.BAR_H)
         self.toolbar.show()
+
+    def _set_color(self, color):
+        """Apply a selected swatch colour to the annotation drawing."""
+        self.annotation_color = QColor(color)
+        self.toolbar.set_annotation_color(color)
 
     def _on_close_clicked(self):
         self.finished.emit()
@@ -209,6 +533,13 @@ class AnnotationOverlay(BaseOverlay):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+        # Freeze the frame: paint the static desktop snapshot as an opaque
+        # base so live changes behind the translucent overlay never bleed
+        # through. Both the dimmed surroundings and the bright boxed cutouts
+        # then come from the same snapshot and update together — no more
+        # "background refreshes, selection stays frozen" mismatch.
+        painter.drawPixmap(self.rect(), self.desktop_pixmap,
+                           QRect(self.desktop_pixmap.rect()))
         painter.fillRect(self.rect(), QColor(0, 0, 0, 180))
         for ann in self.annotations:
             self._draw_annotation(painter, ann, is_temp=False)
@@ -218,7 +549,10 @@ class AnnotationOverlay(BaseOverlay):
 
     def _draw_annotation(self, painter, ann, is_temp=False):
         ann_type = ann[0]
-        border_color = _annotation_border_color()
+        # Each annotation keeps the brush colour it was drawn with, so
+        # changing the palette never recolours shapes already on the canvas
+        # (like switching a pen mid-sketch — existing strokes stay as-is).
+        border_color = QColor(ann[-1])
         painter.setPen(QPen(border_color, 2))
 
         if ann_type == "rectangle":
@@ -257,60 +591,131 @@ class AnnotationOverlay(BaseOverlay):
                 # Draw text inside the rect (only for saved annotations)
                 text = ann[2]
                 painter.setFont(QFont("Segoe UI", 14))
-                painter.setPen(QColor(255, 255, 255))
+                painter.setPen(border_color)
                 painter.drawText(rect.adjusted(6, 6, -6, -6), Qt.AlignLeft | Qt.AlignTop, text)
                 self._draw_handles(painter, rect.topRight(), rect)
 
     def _handle_rects(self, top_right, annotation_rect):
         """Layout the two corner controls of an annotation, top-right:
-           [drag grip] [delete]. Clamped to screen — if the corner is too
+           [drag grip] [delete]. Both sit INSIDE the annotation's right edge
+           so they never poke out beyond the content. If the corner is too
            close to the top edge, both controls drop below the annotation."""
         btn_size = 18
         spacing = 4
-        margin = 4
-        x = top_right.x() + margin
+        margin = 6
         y = top_right.y() - btn_size - margin
         if y < 0:
             y = annotation_rect.bottom() + margin
-        delete_rect = QRect(int(x), int(y), btn_size, btn_size)
-        drag_rect = QRect(int(x - btn_size - spacing), int(y), btn_size, btn_size)
+        # Right-align: delete's right edge is inset by `margin` from the
+        # content's right edge; the drag grip sits to its left.
+        left_limit = annotation_rect.left() + margin
+        xd = max(int(top_right.x() - btn_size - margin), int(left_limit))
+        delete_rect = QRect(int(xd), int(y), btn_size, btn_size)
+        xg = max(int(xd - btn_size - spacing), int(left_limit))
+        drag_rect = QRect(int(xg), int(y), btn_size, btn_size)
         return drag_rect, delete_rect
 
     def _draw_handles(self, painter, top_right, annotation_rect):
-        """Draw a delete button (red circle + white X) and a drag handle
-        (translucent white circle + gray grip dots) at the annotation's
-        top-right corner. Records both hit rects for mouse handling."""
+        """Draw a delete button (glass circle + red X) and a drag handle
+        (glass circle + white grip dots) at the annotation's top-right corner.
+        Records both hit rects for mouse handling."""
         drag_rect, delete_rect = self._handle_rects(top_right, annotation_rect)
         ann_key = id(annotation_rect)
         self._delete_rects[ann_key] = delete_rect
         self._drag_rects[ann_key] = drag_rect
 
         painter.setRenderHint(QPainter.Antialiasing)
-        # --- delete: red circle + white X, subtle white ring ---
-        painter.setPen(QPen(QColor(255, 255, 255, 120), 1))
-        painter.setBrush(QColor(239, 68, 68, 235))
-        painter.drawEllipse(delete_rect)
-        xpen = QPen(QColor(255, 255, 255), 2)
-        xpen.setCapStyle(Qt.RoundCap)
-        painter.setPen(xpen)
-        ins = 5
-        painter.drawLine(delete_rect.topLeft() + QPoint(ins, ins),
-                         delete_rect.bottomRight() - QPoint(ins, ins))
-        painter.drawLine(delete_rect.topRight() + QPoint(-ins, ins),
-                         delete_rect.bottomLeft() + QPoint(ins, -ins))
-        # --- drag: translucent white circle + gray grip grid ---
-        painter.setPen(QPen(QColor(255, 255, 255, 120), 1))
-        painter.setBrush(QColor(255, 255, 255, 190))
-        painter.drawEllipse(drag_rect)
-        gpen = QPen(QColor(90, 90, 90, 230), 1)
-        gpen.setCapStyle(Qt.FlatCap)
-        painter.setPen(gpen)
-        painter.setBrush(Qt.NoBrush)
-        cx, cy = drag_rect.center().x(), drag_rect.center().y()
-        radius = 2.2
-        for dx in (-3, 0, 3):
-            for dy in (-3, 3):
-                painter.drawEllipse(QPointF(cx + dx, cy + dy), radius, radius)
+
+        # Common glass circle for both controls: dark translucent body with a
+        # thin light ring, so they read as pills over the dark capture.
+        def _glass(r):
+            painter.setPen(QPen(QColor(255, 255, 255, 70), 1))
+            painter.setBrush(QColor(28, 30, 34, 215))
+            painter.drawEllipse(r)
+
+        # --- delete: glass circle + red X ---
+        _glass(delete_rect)
+        self._paint_glyph(painter, delete_rect, "delete")
+
+        # --- drag: glass circle + white four-point move arrow ---
+        _glass(drag_rect)
+        self._paint_glyph(painter, drag_rect, "move")
+
+    def _glyph(self, kind):
+        """Return (img, icx, icy) for the corner-control icon.
+
+        The icon is pre-rendered onto a small transparent image centred on
+        (10,10), then the ACTUAL ink bounding box is measured on the rendered
+        pixels. Returning the ink centre lets the caller blit it so the
+        displayed ink lands exactly on the button centre — absorbing any
+        backend/DPR rasterisation bias instead of trusting the maths.
+        """
+        cached = self._glyph_cache.get(kind)
+        if cached is not None:
+            return cached
+        size = 20
+        img = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+        img.fill(Qt.transparent)
+        p = QPainter(img)
+        p.setRenderHint(QPainter.Antialiasing)
+        cx = cy = size / 2.0  # 10,10
+
+        if kind == "delete":
+            pen = QPen(QColor(255, 96, 96), 2)
+            pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            off = 3.5
+            p.drawLine(QPointF(cx - off, cy - off), QPointF(cx + off, cy + off))
+            p.drawLine(QPointF(cx - off, cy + off), QPointF(cx + off, cy - off))
+        else:  # move — four-point orthogonal move arrow
+            pen = QPen(QColor(255, 255, 255, 235), 2)
+            pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+
+            def arrow(p1, p2):
+                dx, dy = p2.x() - p1.x(), p2.y() - p1.y()
+                length = math.hypot(dx, dy)
+                if length < 1e-6:
+                    return
+                ux, uy = dx / length, dy / length
+                bx, by = -ux, -uy
+                nx, ny = -by, bx
+                spread, h = 0.5, 1.4
+                p.drawLine(p1, p2)
+                p.drawLine(p2, QPointF(p2.x() + (bx + nx * spread) * h,
+                                       p2.y() + (by + ny * spread) * h))
+                p.drawLine(p2, QPointF(p2.x() + (bx - nx * spread) * h,
+                                       p2.y() + (by - ny * spread) * h))
+
+            e = 2.6
+            arrow(QPointF(cx, cy + e), QPointF(cx, cy - e))
+            arrow(QPointF(cx, cy - e), QPointF(cx, cy + e))
+            arrow(QPointF(cx + e, cy), QPointF(cx - e, cy))
+            arrow(QPointF(cx - e, cy), QPointF(cx + e, cy))
+        p.end()
+
+        # Measure where the ink actually landed.
+        minx = miny = size
+        maxx = maxy = -1
+        for y in range(size):
+            for x in range(size):
+                if img.pixelColor(x, y).alpha() > 0:
+                    minx, maxx = min(minx, x), max(maxx, x)
+                    miny, maxy = min(miny, y), max(maxy, y)
+        icx = (minx + maxx) / 2.0
+        icy = (miny + maxy) / 2.0
+        result = (img, icx, icy)
+        self._glyph_cache[kind] = result
+        return result
+
+    def _paint_glyph(self, painter, button_rect, kind):
+        """Blit a corner-control icon so its ink centre sits on the button
+        centre — determined by measuring the rendered ink, not the maths."""
+        img, icx, icy = self._glyph(kind)
+        c = button_rect.center()
+        painter.drawImage(QPointF(c.x() - icx, c.y() - icy), img)
 
     def _get_delete_rects(self):
         result = {}
@@ -359,6 +764,12 @@ class AnnotationOverlay(BaseOverlay):
         if event.button() == Qt.LeftButton:
             pos = event.position().toPoint()
 
+            # A click anywhere on the overlay while the color strip is open
+            # collapses it first (does not start a new annotation).
+            if self.toolbar and self.toolbar._ext > 0.5:
+                self.toolbar.collapse_color_strip()
+                return
+
             # Check delete buttons first
             delete_rects = self._get_delete_rects()
             for idx, rect in delete_rects.items():
@@ -395,12 +806,13 @@ class AnnotationOverlay(BaseOverlay):
             # Start drawing (same approach as screenshot: store start_point)
             self._drag_start = pos
             self.is_drawing = True
+            brush = self.annotation_color.name()  # colour frozen at draw-time
             if self.current_mode == "rectangle":
-                self.current_shape = ("rectangle", QRect(pos, pos))
+                self.current_shape = ("rectangle", QRect(pos, pos), brush)
             elif self.current_mode == "freeform":
-                self.current_shape = ("freeform", [pos])
+                self.current_shape = ("freeform", [pos], brush)
             elif self.current_mode == "text":
-                self.current_shape = ("text", QRect(pos, pos))
+                self.current_shape = ("text", QRect(pos, pos), brush)
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event):
@@ -437,13 +849,14 @@ class AnnotationOverlay(BaseOverlay):
 
         if self.is_drawing and self._drag_start and self.current_shape:
             pos = event.position().toPoint()
+            brush = self.current_shape[-1]  # keep the draw-time colour
             if self.current_mode == "rectangle":
                 # Same approach as screenshot: QRect(start, end).normalized()
-                self.current_shape = ("rectangle", QRect(self._drag_start, pos).normalized())
+                self.current_shape = ("rectangle", QRect(self._drag_start, pos).normalized(), brush)
             elif self.current_mode == "freeform":
                 self.current_shape[1].append(pos)
             elif self.current_mode == "text":
-                self.current_shape = ("text", QRect(self._drag_start, pos).normalized())
+                self.current_shape = ("text", QRect(self._drag_start, pos).normalized(), brush)
             self.update()
 
     def mouseReleaseEvent(self, event):
@@ -471,6 +884,8 @@ class AnnotationOverlay(BaseOverlay):
                 elif mode == "text":
                     rect = self.current_shape[1]
                     if rect.width() > 5 and rect.height() > 5:
+                        # Remember the draw-time colour for the new text box.
+                        self._pending_text_color = self.current_shape[-1]
                         # Create inline text editor
                         self._start_text_edit(rect, "", None)
             self.current_shape = None
@@ -496,12 +911,15 @@ class AnnotationOverlay(BaseOverlay):
         self.text_editor = None
         if text:
             if self._text_edit_idx is not None:
-                # Update existing annotation
-                self.annotations[self._text_edit_idx] = ("text", rect, text)
+                # Re-editing an existing text — keep its original colour.
+                color = self.annotations[self._text_edit_idx][-1]
+                self.annotations[self._text_edit_idx] = ("text", rect, text, color)
             else:
-                # Add new annotation
-                self.annotations.append(("text", rect, text))
+                # New text — use the colour captured when its box was drawn.
+                color = self._pending_text_color or self.annotation_color.name()
+                self.annotations.append(("text", rect, text, color))
         self._text_edit_idx = None
+        self._pending_text_color = None
         self.update()
         # Re-focus the overlay for keyboard events
         self.setFocus()

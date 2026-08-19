@@ -1,4 +1,6 @@
-# DeskFlow
+<p align="center">
+  <img src="https://lisseldee.github.io/assets/images/webp/7-e.webp" width="100%" alt="DeskFlow">
+</p>
 
 <div align="center">
 
@@ -9,6 +11,10 @@
 ## Project Introduction
 
 DeskFlow is a PySide6-based Windows desktop quick toolbar. Use the global hotkey <kbd>Ctrl</kbd> + <kbd>·</kbd> to summon a floating capsule, providing quick access to screenshot, translation, annotation, LAN clipboard sync, and other daily office tools at your fingertips.
+
+## 项目截图
+
+![Main Interface](https://lisseldee.github.io/assets/images/webp/7-1.webp)
 
 ## Project Information
 
@@ -22,15 +28,17 @@ DeskFlow is a PySide6-based Windows desktop quick toolbar. Use the global hotkey
 ### Quick Actions
 - **Global Hotkey**: <kbd>Ctrl</kbd> + <kbd>·</kbd> to show/hide the floating capsule panel
 - **Screenshot Tool**: Quickly capture screen regions with preview, save, and copy support
+- **Translate Tool**: Select any screen region for OCR recognition + online translation
 - **Annotation Tool**: Annotate screenshots with rectangles, freeform shapes, and text
 - **LAN Clipboard**: Real-time text clipboard sync across devices with the same room code
-- **Settings Panel**: Language switching, hotkey display, and auto-start configuration
+- **Settings Panel**: Language switching, translate target language, hotkey display, auto-start, and about
 
 ### Capsule Panel
 - **Floating Capsule**: Clean capsule-shaped floating panel, adapts to system theme (dark/light mode)
 - **SVG Icons**: Crisp vector icons with dynamic hover color changes
 - **Smooth Animation**: Position and opacity transition animations for show/hide
-- **Smart Dismiss**: Click outside or press ESC to auto-hide
+- **Smart Dismiss**: Click outside or press ESC to auto-hide, friendly to its own extension windows (family windows)
+- **System Tray**: Persistent tray icon; double-click to summon, right-click for Show/Exit
 - **Always on Top**: Panel stays above all windows
 
 ### Screenshot Features
@@ -38,10 +46,20 @@ DeskFlow is a PySide6-based Windows desktop quick toolbar. Use the global hotkey
 - **Live Preview**: Instant preview after capture before saving
 - **Multiple Actions**: Save as file or copy to clipboard
 
+### Translate Features
+- **Region Translate**: Select any screen region, auto-recognize text and translate to the target language
+- **System OCR**: Uses the Windows built-in OCR engine (WinRT); no network needed for recognition
+- **Online Translation**: Based on Google's free endpoint, no API key, with multi-host failover
+- **Target Languages**: Simplified Chinese, Traditional Chinese, English, Japanese, Korean
+- **Result Card**: Rounded card fades in with a loading animation, result + one-click copy, retry on failure, and scrolling for long text
+- **Multi-Monitor Safe**: The card auto-anchors near the selection within the current screen, never overflowing
+
 ### Annotation Features
-- **Rectangle Annotation**: Draw rectangles on screenshots, displays original content without overlay
+- **Rectangle Annotation**: Draw rectangles on screenshots; the boxed region keeps the original content (no overlay) while the outside is dimmed to highlight it
 - **Freeform Annotation**: Freehand drawing for annotation areas
 - **Text Annotation**: Add text labels to screenshots
+- **Editable Annotations**: Drag to reposition or delete; control-button icons are precisely centered by their ink bounding box
+- **Fixed Snapshot Base**: The boxed content and the dimmed overlay come from one frozen desktop frame, so the background and selection never visually desync
 - **Secondary Toolbar**: Capsule-style secondary toolbar with close support
 
 ### LAN Clipboard
@@ -56,8 +74,10 @@ DeskFlow is a PySide6-based Windows desktop quick toolbar. Use the global hotkey
 
 ### Settings Features
 - **Language Switching**: Toggle between Chinese and English, takes effect immediately without restart
+- **Translate Target Language**: Configure the translation target language, takes effect immediately
 - **Hotkey Display**: View current global hotkey binding
 - **Auto-start**: Set to launch on system boot, persisted to configuration
+- **About Page**: View version, author, and repository info, with check-for-update support
 
 ## Changelog
 
@@ -67,7 +87,8 @@ See [Changelog](https://github.com/LisseldeE/DeskFlow/blob/main/CHANGELOG.md)
 
 - **Python 3.x**: Core development language
 - **PySide6**: Qt6 Python bindings, GUI framework
-- **Win32 API**: Global hotkey registration, system event monitoring
+- **Win32 API**: Global hotkey registration, system event monitoring, system tray
+- **WinRT**: Windows built-in OCR engine (text recognition for the translate feature)
 - **SVG**: Vector icon rendering
 - **JSON**: Configuration file persistence
 - **Socket (UDP + TCP)**: LAN clipboard discovery and relay
@@ -83,8 +104,12 @@ See [Changelog](https://github.com/LisseldeE/DeskFlow/blob/main/CHANGELOG.md)
 ### Install Dependencies
 
 ```bash
-pip install PySide6
+pip install -r requirements.txt
 ```
+
+> The full dependency list lives in `requirements.txt`, including PySide6 and the winrt packages required by the translate feature.
+>
+> If you don't need the region-translate feature, `pip install PySide6` alone is enough.
 
 ### Run the Application
 
@@ -100,15 +125,23 @@ DeskFlow/
 ├── icon.ico                 # Application icon
 ├── README.md                # Chinese documentation
 ├── README_EN.md             # English documentation
+├── requirements.txt         # Dependency manifest
 ├── modules/
 │   ├── capsule.py           # Floating capsule panel
 │   ├── screenshot.py        # Screenshot functionality
 │   ├── annotation.py        # Annotation functionality
+│   ├── translate.py         # Region translate (OCR + online translation)
 │   ├── settings.py          # Settings dialog
+│   ├── about.py             # About page and check-for-update
 │   ├── config.py            # Configuration management
 │   ├── i18n.py              # Internationalization
 │   ├── hotkey.py            # Global hotkey
 │   ├── icons.py             # SVG icons
+│   ├── widgets.py           # Shared toolbar widgets (capsule-style icon buttons)
+│   ├── overlay.py           # Full-screen overlay base class
+│   ├── family.py            # Family-window registry (focus-aware hide)
+│   ├── global_mouse_hook.py # Global mouse hook
+│   ├── keystroke.py         # Keystroke utilities
 │   ├── clipboard_manager.py # LAN clipboard coordinator
 │   ├── clipboard_network.py # UDP discovery + TCP relay network layer
 │   ├── clipboard_monitor.py # System clipboard monitor (with echo guard)
@@ -126,6 +159,7 @@ Configuration file is stored at `DeskFlow/config.json` under the user home direc
 - `clipboard_enabled`: Whether LAN clipboard is enabled (true / false)
 - `clipboard_expanded`: Whether the clipboard panel is expanded (true / false)
 - `clipboard_room`: Clipboard room code (6-digit number)
+- `translate_target_lang`: Translate target language (zh-CN / zh-TW / en / ja / ko)
 
 Clipboard history is stored in `clipboard_history.db` (SQLite) in the same directory.
 
@@ -135,6 +169,6 @@ This project is licensed under the MIT License. See [LICENSE](https://github.com
 
 ## Feedback
 
-**This application is under development. If you have any questions or new ideas, feel free to contact me!**
+If you have any questions or new ideas, feel free to contact me!
 
 Issues and Pull Requests are welcome!
