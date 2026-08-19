@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QRect, Signal
 from PySide6.QtGui import QPainter, QColor, QPen, QPixmap, QGuiApplication, QFont, QPalette
-from modules.overlay import BaseOverlay
+from modules.overlay import BaseOverlay, pixel_source
 from modules.i18n import I18n
 from datetime import datetime
 
@@ -41,7 +41,8 @@ class ScreenshotOverlay(BaseOverlay):
 
             # Cut out the selection area - show desktop content
             painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-            painter.drawPixmap(sel_rect, self.desktop_pixmap, sel_rect)
+            painter.drawPixmap(sel_rect, self.desktop_pixmap,
+                               pixel_source(self.desktop_pixmap, sel_rect))
 
             # Draw selection border (theme-aware color, no corner handles)
             border_color = _selection_color()
@@ -67,7 +68,8 @@ class ScreenshotOverlay(BaseOverlay):
             sel_rect = QRect(self.start_point, self.end_point).normalized()
 
             if sel_rect.width() > 5 and sel_rect.height() > 5:
-                captured = self.desktop_pixmap.copy(sel_rect)
+                captured = self.desktop_pixmap.copy(
+                    pixel_source(self.desktop_pixmap, sel_rect))
                 # Emit closed signal before closing (so DeskFlow clears active_overlay)
                 self.closed.emit()
                 # Close overlay first

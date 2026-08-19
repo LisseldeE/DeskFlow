@@ -10,7 +10,7 @@ from PySide6.QtGui import (
     QPainter, QColor, QPen, QFont, QGuiApplication, QFontMetrics,
     QPainterPath, QPalette, QBrush, QKeyEvent, QImage
 )
-from modules.overlay import BaseOverlay
+from modules.overlay import BaseOverlay, pixel_source
 from modules.icons import ICON_RECTANGLE, ICON_FREEFORM, ICON_TEXT, ICON_CLOSE
 from modules.i18n import I18n
 from modules.widgets import GlassIconButton, paint_pill
@@ -559,7 +559,8 @@ class AnnotationOverlay(BaseOverlay):
             rect = ann[1]
             # Cut out the overlay - show desktop content inside the rectangle
             painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-            painter.drawPixmap(rect, self.desktop_pixmap, rect)
+            painter.drawPixmap(rect, self.desktop_pixmap,
+                               pixel_source(self.desktop_pixmap, rect))
             # Draw border only (no fill)
             painter.setPen(QPen(border_color, 2))
             painter.setBrush(Qt.NoBrush)
@@ -653,12 +654,15 @@ class AnnotationOverlay(BaseOverlay):
         cached = self._glyph_cache.get(kind)
         if cached is not None:
             return cached
-        size = 20
-        img = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+        size = 20  # logical icon size
+        dpr = QGuiApplication.primaryScreen().devicePixelRatio() or 1.0
+        px = int(round(size * dpr))  # physical buffer keeps the ink crisp
+        img = QImage(px, px, QImage.Format_ARGB32_Premultiplied)
         img.fill(Qt.transparent)
+        img.setDevicePixelRatio(dpr)
         p = QPainter(img)
         p.setRenderHint(QPainter.Antialiasing)
-        cx = cy = size / 2.0  # 10,10
+        cx = cy = size / 2.0  # 10,10 (logical — the painter scales by DPR)
 
         if kind == "delete":
             pen = QPen(QColor(255, 96, 96), 2)
@@ -696,11 +700,11 @@ class AnnotationOverlay(BaseOverlay):
             arrow(QPointF(cx - e, cy), QPointF(cx + e, cy))
         p.end()
 
-        # Measure where the ink actually landed.
-        minx = miny = size
+        # Measure where the ink actually landed (device pixels).
+        minx = miny = px
         maxx = maxy = -1
-        for y in range(size):
-            for x in range(size):
+        for y in range(px):
+            for x in range(px):
                 if img.pixelColor(x, y).alpha() > 0:
                     minx, maxx = min(minx, x), max(maxx, x)
                     miny, maxy = min(miny, y), max(maxy, y)
@@ -714,8 +718,11 @@ class AnnotationOverlay(BaseOverlay):
         """Blit a corner-control icon so its ink centre sits on the button
         centre — determined by measuring the rendered ink, not the maths."""
         img, icx, icy = self._glyph(kind)
+        dpr = img.devicePixelRatio() or 1.0
         c = button_rect.center()
-        painter.drawImage(QPointF(c.x() - icx, c.y() - icy), img)
+        # icx/icy are device pixels; drawImage takes logical coordinates, so
+        # scale the offset back down for crisp, centred HiDPI placement.
+        painter.drawImage(QPointF(c.x() - icx / dpr, c.y() - icy / dpr), img)
 
     def _get_delete_rects(self):
         result = {}

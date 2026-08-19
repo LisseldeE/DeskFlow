@@ -27,16 +27,21 @@ from modules.family import FamilyWindowRegistry
 
 
 def _make_text_icon(svg, color, size=16):
-    """Tiny helper kept local — the capsule has its own _make_icon."""
-    from PySide6.QtCore import QByteArray
+    """Tiny helper kept local — the capsule has its own _make_icon.
+
+    Rasterised on a devicePixelRatio-scaled buffer so it stays crisp on
+    scaled-Windows (HiDPI) displays."""
+    from PySide6.QtCore import QByteArray, QRectF
     from PySide6.QtSvg import QSvgRenderer
-    from PySide6.QtGui import QPixmap, QIcon
+    from PySide6.QtGui import QPixmap, QIcon, QGuiApplication
     colored = svg.replace('stroke="currentColor"', f'stroke="{color}"')
     renderer = QSvgRenderer(QByteArray(colored.encode()))
-    pm = QPixmap(size, size)
+    dpr = QGuiApplication.primaryScreen().devicePixelRatio() or 1.0
+    pm = QPixmap(int(size * dpr), int(size * dpr))
+    pm.setDevicePixelRatio(dpr)
     pm.fill(Qt.transparent)
     p = QPainter(pm)
-    renderer.render(p)
+    renderer.render(p, QRectF(0, 0, size, size))
     p.end()
     return QIcon(pm)
 

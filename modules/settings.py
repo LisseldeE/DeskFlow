@@ -20,25 +20,49 @@ from modules.about import AboutPage
 
 
 def _get_app_cmd():
-    """Get the command line to run the app"""
-    return f'"{sys.executable}" "{os.path.abspath(sys.argv[0])}"'
+    """Command registered to HKCU Run.
+
+    For a source launch, prefer pythonw.exe (windowless) when available so no
+    black console flashes at logon alongside the app; a frozen build registers
+    only the exe itself (sys.executable is already the entry point)."""
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    exe = sys.executable
+    if os.path.basename(exe).lower() == "python.exe":
+        alt = os.path.join(os.path.dirname(exe), "pythonw.exe")
+        if os.path.exists(alt):
+            exe = alt
+    return f'"{exe}" "{os.path.abspath(sys.argv[0])}"'
 
 
 def apply_autostart(enabled):
-    """Set or clear the auto-start registry entry for the current user"""
+    """Set or clear the auto-start registry entry for the current user.
+
+    Returns True on success, False on failure (logged to stderr) so callers
+    can surface the problem instead of it being silently swallowed."""
     key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
     try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
-        if enabled:
-            winreg.SetValueEx(key, "DeskFlow", 0, winreg.REG_SZ, _get_app_cmd())
-        else:
-            try:
-                winreg.DeleteValue(key, "DeskFlow")
-            except FileNotFoundError:
-                pass
-        winreg.CloseKey(key)
+        try:
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE
+            )
+        except OSError:
+            # Run key missing (rare) — create it so the entry can be written.
+            key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
+        try:
+            if enabled:
+                winreg.SetValueEx(key, "DeskFlow", 0, winreg.REG_SZ, _get_app_cmd())
+            else:
+                try:
+                    winreg.DeleteValue(key, "DeskFlow")
+                except FileNotFoundError:
+                    pass
+        finally:
+            winreg.CloseKey(key)
+        return True
     except Exception as e:
         print(f"Failed to set autostart: {e}")
+        return False
 
 
 def _accent_hex():
@@ -100,7 +124,17 @@ class SettingsDialog(QDialog):
         )
         self.setup_ui()
         self.load_settings()
+        self._connect_signals()
         self.center_on_screen()
+
+    def _connect_signals(self):
+        # Changes apply immediately as the user edits each control, rather than
+        # waiting for the dialog to close. done() still re-persists as a safety
+        # net. Load-order note: signals are wired after load_settings() so the
+        # initial population does not trigger redundant saves.
+        self.lang_combo.currentIndexChanged.connect(self._persist)
+        self.autostart_check.toggled.connect(self._persist)
+        self.translate_lang_combo.currentIndexChanged.connect(self._persist)
 
     def setup_ui(self):
         outer = QHBoxLayout(self)
@@ -127,7 +161,15 @@ class SettingsDialog(QDialog):
         self.stack.addWidget(self._build_translate_page())
         self.stack.addWidget(self._build_system_page())
         self.stack.addWidget(AboutPage())
-        outer.addWidget(self.stack, 1)
+
+        # Right pane = content stack only. Settings are persisted automatically
+        # whenever the dialog closes (see done()), so no Save button is needed.
+        right = QVBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(0)
+        right.addWidget(self.stack, 1)
+
+        outer.addLayout(right, 1)
 
         self.sidebar.currentRowChanged.connect(self.stack.setCurrentIndex)
 
@@ -221,7 +263,7 @@ class SettingsDialog(QDialog):
         if index >= 0:
             self.translate_lang_combo.setCurrentIndex(index)
 
-    def accept(self):
+    def _persist(self, *_):
         lang = self.lang_combo.currentData()
         I18n.set_language(lang)
 
@@ -230,7 +272,12 @@ class SettingsDialog(QDialog):
         apply_autostart(autostart)
 
         Config().set("translate_target_lang", self.translate_lang_combo.currentData())
-        super().accept()
+
+    def done(self, result):
+        # Settings already apply instantly via _connect_signals(); ending here
+        # re-persists once more as a safety net so nothing is ever lost.
+        self._persist()
+        super().done(result)
 
     def center_on_screen(self):
         screen = QGuiApplication.primaryScreen().availableGeometry()

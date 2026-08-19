@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtSvg import QSvgRenderer
 
-from modules.overlay import BaseOverlay
+from modules.overlay import BaseOverlay, pixel_source
 from modules.i18n import I18n
 from modules.config import Config
 from modules.icons import ICON_COPY, ICON_CHECK
@@ -55,13 +55,18 @@ def _selection_color():
 
 
 def _make_icon(svg_content, color, size=16):
-    """Create a QIcon from an SVG string with theme color substitution."""
+    """Create a QIcon from an SVG string with theme color substitution.
+
+    Rasterised on a devicePixelRatio-scaled buffer so it stays crisp on
+    scaled-Windows (HiDPI) displays."""
     colored = svg_content.replace('stroke="currentColor"', f'stroke="{color}"')
     renderer = QSvgRenderer(QByteArray(colored.encode()))
-    pixmap = QPixmap(size, size)
+    dpr = QGuiApplication.primaryScreen().devicePixelRatio() or 1.0
+    pixmap = QPixmap(int(size * dpr), int(size * dpr))
+    pixmap.setDevicePixelRatio(dpr)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
-    renderer.render(painter)
+    renderer.render(painter, QRectF(0, 0, size, size))
     painter.end()
     return QIcon(pixmap)
 
@@ -653,7 +658,8 @@ class TranslateOverlay(BaseOverlay):
             rect = self.sel_rect
 
         if rect:
-            painter.drawPixmap(rect, self.desktop_pixmap, rect)
+            painter.drawPixmap(rect, self.desktop_pixmap,
+                               pixel_source(self.desktop_pixmap, rect))
             painter.setPen(QPen(_selection_color(), 2))
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(rect)
@@ -703,7 +709,8 @@ class TranslateOverlay(BaseOverlay):
 
     def _start_translate(self, sel):
         self.sel_rect = sel
-        captured = self.desktop_pixmap.copy(sel)
+        captured = self.desktop_pixmap.copy(
+            pixel_source(self.desktop_pixmap, sel))
         self._captured_png = _pixmap_to_png(captured)
         self.update()
 

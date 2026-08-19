@@ -10,25 +10,43 @@ AnimatedButton pattern). Keeping this in one module guarantees the two bars
 stay visually consistent.
 """
 from PySide6.QtCore import (
-    Qt, QByteArray, QEvent, QVariantAnimation, QEasingCurve, Signal
+    Qt, QByteArray, QRectF, QPointF, QEvent, QVariantAnimation, QEasingCurve,
+    Signal
 )
 from PySide6.QtGui import (
-    QPainter, QColor, QPixmap, QIcon, QPalette, QLinearGradient, QPen
+    QPainter, QColor, QPixmap, QIcon, QPalette, QLinearGradient, QPen,
+    QGuiApplication
 )
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QPushButton, QApplication
 
 
-def make_icon(svg_content, color, size=22):
-    """Create a QIcon from an SVG string with a color substitution."""
+def screen_dpr():
+    """System devicePixelRatio (1.0 at 100% scaling, 1.25 at 125%, ...)."""
+    return QGuiApplication.primaryScreen().devicePixelRatio() or 1.0
+
+
+def make_pixmap(svg_content, color, size):
+    """Rasterise an SVG (with color substitution) onto a DPR-scaled buffer.
+
+    The buffer is `size * devicePixelRatio` px and tagged with that DPR, so
+    when it's drawn via a DPR-aware painter it displays at its logical size
+    while staying crisp on scaled-Windows (HiDPI) displays."""
     colored = svg_content.replace('stroke="currentColor"', f'stroke="{color}"')
     renderer = QSvgRenderer(QByteArray(colored.encode()))
-    pixmap = QPixmap(size, size)
+    dpr = screen_dpr()
+    pixmap = QPixmap(int(size * dpr), int(size * dpr))
+    pixmap.setDevicePixelRatio(dpr)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
-    renderer.render(painter)
+    renderer.render(painter, QRectF(0, 0, size, size))
     painter.end()
-    return QIcon(pixmap)
+    return pixmap
+
+
+def make_icon(svg_content, color, size=22):
+    """Create a QIcon from an SVG string with a color substitution."""
+    return QIcon(make_pixmap(svg_content, color, size))
 
 
 def system_color(role):
@@ -191,7 +209,7 @@ class GlassIconButton(QPushButton):
         key = (color.rgba(), size)
         pm = self._pix_cache.get(key)
         if pm is None:
-            pm = make_icon(self._svg, _to_hex(color), size).pixmap(size, size)
+            pm = make_pixmap(self._svg, _to_hex(color), size)
             self._pix_cache[key] = pm
         return pm
 
@@ -205,11 +223,14 @@ class GlassIconButton(QPushButton):
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(h.red(), h.green(), h.blue(), self._alpha))
             p.drawRoundedRect(rect, self._size // 3, self._size // 3)
-        # Icon, centered via the cached pixmap at the resolved color.
+        # Icon, centered via the DPR-aware cached pixmap (centre on its
+        # LOGICAL size so a DPR-tagged pixmap isn't offset by the scale).
         pm = self._icon_pixmap(self._icon_color, self._icon_size)
-        x = max(0, (rect.width() - pm.width()) // 2)
-        y = max(0, (rect.height() - pm.height()) // 2)
-        p.drawPixmap(x, y, pm)
+        dpr = pm.devicePixelRatio() or 1.0
+        w, h = pm.width() / dpr, pm.height() / dpr
+        x = max(0.0, (rect.width() - w) / 2.0)
+        y = max(0.0, (rect.height() - h) / 2.0)
+        p.drawPixmap(QPointF(x, y), pm)
         p.end()
 
     # ----- events -----

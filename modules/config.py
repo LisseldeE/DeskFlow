@@ -7,7 +7,7 @@ class Config:
 
     # --- App info (used by the About page / check-for-update) ---
     APP_NAME = "DeskFlow"
-    APP_VERSION = "1.1.0.0"
+    APP_VERSION = "1.1.1.0"
     APP_AUTHOR = "Lisselde_E"
     APP_AUTHOR_LINK = "https://github.com/"
 
