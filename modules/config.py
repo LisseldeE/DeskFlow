@@ -14,20 +14,16 @@ class Config:
     # Feature switch: show the "check for updates" button.
     ENABLE_CHECK_UPDATE = True
 
-    # Repository info for the update checker.
+    # Repository info (used by the About page / links).
     GITHUB_REPO = "LisseldeE/CapRise"
     GITEE_REPO = "Lisselde_E/CapRise"
 
-    # Version metadata lives in a Renew.json at each repo root. GitHub is
-    # checked when the app language is not zh_CN, Gitee otherwise — mirroring
-    # the LANSyncBox reference behaviour.
-    GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/tags"
-    GITEE_API = f"https://gitee.com/api/v5/repos/{GITEE_REPO}/tags"
+    # Latest version is served as a plain-text file on GitHub Pages
+    # (https://lisseldee.github.io/version/caprise) so the update checker
+    # avoids Gitee/GitHub raw hotlink bans and public-API rate limits.
+    UPDATE_URL = "https://lisseldee.github.io/version/caprise"
     GITHUB_RELEASES = f"https://github.com/{GITHUB_REPO}/releases"
     GITEE_RELEASES = f"https://gitee.com/{GITEE_REPO}/releases"
-    # Raw Renew.json exposing the latest version from each repo.
-    GITHUB_RENEW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/Renew.json"
-    GITEE_RENEW_URL = f"https://gitee.com/{GITEE_REPO}/raw/main/Renew.json"
 
     def __new__(cls):
         if cls._instance is None:

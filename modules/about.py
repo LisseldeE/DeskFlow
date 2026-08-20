@@ -1,11 +1,11 @@
 """About page and check-for-update logic for CapRise.
 
-The update check mirrors the reference LANSyncBox implementation: it picks
-GitHub or Gitee based on the UI language, fetches that repo's Renew.json
-(which carries the newest version), and compares it against the local one.
+The update check fetches the latest version from a plain-text file hosted on
+GitHub Pages (Config.UPDATE_URL), which avoids the Gitee/GitHub raw hotlink
+bans and the public-API rate limits of the previous GitHub/Gitee pick-by-
+language approach. It then compares that version against the local one.
 """
 import re
-import json
 import urllib.request
 import urllib.error
 from PySide6.QtWidgets import (
@@ -56,32 +56,17 @@ def _show_message(parent, title, text, icon):
 def check_update(parent=None):
     """Check for a newer version and prompt to download if one exists.
 
-    Mirrors the LANSyncBox reference: pick GitHub or Gitee based on the UI
-    language, fetch that repo's root Renew.json (which carries the latest
-    version in its "Renew" field), and compare it against the local one.
+    Always fetches Config.UPDATE_URL (the GitHub Pages plain-text version
+    file), decodes its body into a version, and compares it against the local
+    one — no GitHub/Gitee branching needed.
     """
     try:
-        if I18n.get_language() == "zh_CN":
-            renew_url = Config.GITEE_RENEW_URL
-            releases_url = Config.GITEE_RELEASES
-        else:
-            renew_url = Config.GITHUB_RENEW_URL
-            releases_url = Config.GITHUB_RELEASES
-
-        req = urllib.request.Request(renew_url)
+        req = urllib.request.Request(Config.UPDATE_URL)
         req.add_header('User-Agent', Config.APP_NAME)
         with urllib.request.urlopen(req, timeout=10) as response:
-            data = json.loads(response.read().decode())
+            body = response.read().decode()
 
-        # The Renew.json may spell the version under "Renew" or "renew";
-        # fall back to scanning all string values for a dotted version.
-        latest_version = None
-        if isinstance(data, dict):
-            for key in ("Renew", "renew"):
-                raw = data.get(key, "")
-                latest_version = _extract_version(str(raw))
-                if latest_version:
-                    break
+        latest_version = _extract_version(body)
         if latest_version is None:
             _show_message(parent, I18n.tr("about_check_update"),
                           I18n.tr("about_no_tags"), QMessageBox.Warning)
@@ -103,6 +88,10 @@ def check_update(parent=None):
             box.addButton(I18n.tr("about_no"), QMessageBox.NoRole)
             box.exec()
             if box.clickedButton() == yes:
+                # Download page by language: Gitee for Chinese, GitHub else.
+                releases_url = (Config.GITEE_RELEASES
+                                if I18n.get_language() == "zh_CN"
+                                else Config.GITHUB_RELEASES)
                 QDesktopServices.openUrl(QUrl(releases_url))
         else:
             _show_message(parent, I18n.tr("about_check_update"),
