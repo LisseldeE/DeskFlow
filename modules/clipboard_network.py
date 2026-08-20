@@ -29,7 +29,7 @@ import time
 from PySide6.QtCore import QObject, Signal
 
 
-# --- Ports (DeskFlow-specific; separate from LANSyncBox to allow co-existence)
+# --- Ports (CapRise-specific; separate from LANSyncBox to allow co-existence)
 DISCOVERY_PORT_START = 9548
 DISCOVERY_PORT_END = 9557            # inclusive (10 ports, allows multi-instance)
 TCP_PORT_DEFAULT = 9547

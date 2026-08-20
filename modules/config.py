@@ -6,17 +6,17 @@ class Config:
     _instance = None
 
     # --- App info (used by the About page / check-for-update) ---
-    APP_NAME = "DeskFlow"
-    APP_VERSION = "1.1.1.0"
+    APP_NAME = "CapRise"
+    APP_VERSION = "1.1.2.0"
     APP_AUTHOR = "Lisselde_E"
-    APP_AUTHOR_LINK = "https://github.com/"
+    APP_AUTHOR_LINK = "https://lisseldee.github.io/#7"  # 项目主页链接
 
     # Feature switch: show the "check for updates" button.
     ENABLE_CHECK_UPDATE = True
 
     # Repository info for the update checker.
-    GITHUB_REPO = "LisseldeE/DeskFlow"
-    GITEE_REPO = "Lisselde_E/DeskFlow"
+    GITHUB_REPO = "LisseldeE/CapRise"
+    GITEE_REPO = "Lisselde_E/CapRise"
 
     # Version metadata lives in a Renew.json at each repo root. GitHub is
     # checked when the app language is not zh_CN, Gitee otherwise — mirroring
@@ -37,7 +37,7 @@ class Config:
         return cls._instance
 
     def _get_config_path(self):
-        config_dir = Path.home() / "DeskFlow"
+        config_dir = Path.home() / "CapRise"
         config_dir.mkdir(parents=True, exist_ok=True)
         return config_dir / "config.json"
 

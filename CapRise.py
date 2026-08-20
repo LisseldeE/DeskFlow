@@ -1,5 +1,5 @@
 """
-DeskFlow - PySide6 quick tool launcher
+CapRise - PySide6 quick tool launcher
 Main entry point: Ctrl+` to call, capsule UI with multiple tools
 """
 import sys
@@ -21,7 +21,7 @@ from modules.clipboard_manager import ClipboardManager
 
 def set_app_user_model_id():
     """Set the Windows AppUserModelID so the taskbar groups the window with
-    the tray icon under DeskFlow instead of the generic python icon.
+    the tray icon under CapRise instead of the generic python icon.
 
     Must run before the QApplication (i.e. before any window) is created,
     mirroring icon_set.md. Safe no-op on non-Windows / when it fails."""
@@ -29,7 +29,7 @@ def set_app_user_model_id():
         return
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "LisseldeE.DeskFlow.Version")
+            "LisseldeE.CapRise.Version")
     except Exception:
         pass
 
@@ -37,7 +37,7 @@ def set_app_user_model_id():
 def load_app_icon():
     """Load icon.ico from the app directory.
 
-    Handles both dev (python DeskFlow.py) and PyInstaller onefile builds.
+    Handles both dev (python CapRise.py) and PyInstaller onefile builds.
     In a onefile build, sys._MEIPASS points to the temp extraction directory
     where --add-data placed icon.ico. In dev mode, __file__'s directory is
     the project root. Fall back to the exe directory as a last resort."""
@@ -53,17 +53,17 @@ def load_app_icon():
     return QIcon()
 
 
-class DeskFlowApp:
+class CapRiseApp:
     """Main application managing tray, hotkey, capsule, and overlays"""
 
     def __init__(self):
         # Set the AppUserModelID before any window / QApplication exists so
-        # the taskbar shows the DeskFlow icon. Mirrors icon_set.md.
+        # the taskbar shows the CapRise icon. Mirrors icon_set.md.
         set_app_user_model_id()
 
         self.app = QApplication(sys.argv)
         self.app.setQuitOnLastWindowClosed(False)
-        self.app.setApplicationName("DeskFlow")
+        self.app.setApplicationName("CapRise")
         self.app.setWindowIcon(load_app_icon())
 
         Config()
@@ -87,7 +87,7 @@ class DeskFlowApp:
     def setup_tray(self):
         self.tray_icon = QSystemTrayIcon()
         self.tray_icon.setIcon(load_app_icon())
-        self.tray_icon.setToolTip("DeskFlow")
+        self.tray_icon.setToolTip("CapRise")
 
         menu = QMenu()
         show_action = menu.addAction(I18n.tr("show"))
@@ -191,5 +191,5 @@ class DeskFlowApp:
 
 
 if __name__ == "__main__":
-    app = DeskFlowApp()
+    app = CapRiseApp()
     sys.exit(app.run())

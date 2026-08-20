@@ -1,6 +1,6 @@
 """SQLite-backed clipboard history store (text only, per PRD).
 
-The DB lives at ~/DeskFlow/clipboard_history.db. Accessed only from the Qt
+The DB lives at ~/CapRise/clipboard_history.db. Accessed only from the Qt
 main thread (the manager routes all network callbacks through signals onto
 the main thread), so no locking is required.
 """
@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 def _db_path():
-    return Path.home() / "DeskFlow" / "clipboard_history.db"
+    return Path.home() / "CapRise" / "clipboard_history.db"
 
 
 class ClipboardHistory:

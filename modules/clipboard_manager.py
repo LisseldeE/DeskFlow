@@ -48,7 +48,7 @@ class ClipboardManager(QObject):
         self._role = None  # "host" | "client" | None
 
         self._peer_id = uuid.uuid4().hex[:12]
-        self._peer_name = (socket.gethostname() or "DeskFlow")[:24]
+        self._peer_name = (socket.gethostname() or "CapRise")[:24]
         self._room_code = ""
         self._enabled = False
         # expanded = panel card visible. Independent of _enabled so the user can
@@ -99,7 +99,7 @@ class ClipboardManager(QObject):
 
     def is_panel_visible(self) -> bool:
         """True if the panel card is currently on screen (mid-animation or
-        fully shown). Used by DeskFlow.toggle_capsule to decide whether the
+        fully shown). Used by CapRise.toggle_capsule to decide whether the
         family as a whole is visible — capsule OR panel counts."""
         return self._panel.isVisible()
 

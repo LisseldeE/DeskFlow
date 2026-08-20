@@ -1,4 +1,4 @@
-"""Settings dialog for DeskFlow.
+"""Settings dialog for CapRise.
 
 Split-pane layout: a left navigation column lets the user switch between the
 General / Translate / System / About sub-cards, and the right pane shows the
@@ -10,9 +10,9 @@ import winreg
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox,
     QListWidget, QListWidgetItem, QStackedWidget, QWidget, QFrame,
-    QApplication
+    QApplication, QGraphicsOpacityEffect
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QByteArray, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QGuiApplication, QPalette
 from modules.config import Config
 from modules.i18n import I18n
@@ -51,10 +51,10 @@ def apply_autostart(enabled):
             key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
         try:
             if enabled:
-                winreg.SetValueEx(key, "DeskFlow", 0, winreg.REG_SZ, _get_app_cmd())
+                winreg.SetValueEx(key, "CapRise", 0, winreg.REG_SZ, _get_app_cmd())
             else:
                 try:
-                    winreg.DeleteValue(key, "DeskFlow")
+                    winreg.DeleteValue(key, "CapRise")
                 except FileNotFoundError:
                     pass
         finally:
@@ -119,6 +119,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(I18n.tr("settings_title"))
         self.setFixedSize(520, 400)
+        self._page_anim = None
         self.setWindowFlags(
             Qt.Dialog | Qt.WindowCloseButtonHint | Qt.WindowStaysOnTopHint
         )
@@ -171,7 +172,7 @@ class SettingsDialog(QDialog):
 
         outer.addLayout(right, 1)
 
-        self.sidebar.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.sidebar.currentRowChanged.connect(self._switch_page)
 
     # ----- pages -----
 
@@ -278,6 +279,45 @@ class SettingsDialog(QDialog):
         # re-persists once more as a safety net so nothing is ever lost.
         self._persist()
         super().done(result)
+
+    # ----- page transition -----
+
+    def _switch_page(self, index):
+        """Switch the right-pane page with a short fade-in transition."""
+        self.stack.setCurrentIndex(index)
+        page = self.stack.currentWidget()
+        if page is None:
+            return
+        # Stop any in-flight transition.
+        if self._page_anim is not None:
+            try:
+                self._page_anim.stop()
+                self._page_anim.deleteLater()
+            except RuntimeError:
+                pass
+            self._page_anim = None
+        effect = QGraphicsOpacityEffect(page)
+        page.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, QByteArray(b"opacity"))
+        anim.setDuration(200)
+        anim.setEasingCurve(QEasingCurve.Linear)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.finished.connect(self._on_page_fade_finished)
+        self._page_anim = anim
+        anim.start()
+
+    def _on_page_fade_finished(self):
+        """Clear the temporary opacity effect once the fade completes."""
+        if self._page_anim is not None:
+            try:
+                self._page_anim.deleteLater()
+            except RuntimeError:
+                pass
+            self._page_anim = None
+        page = self.stack.currentWidget()
+        if page is not None and page.graphicsEffect() is not None:
+            page.setGraphicsEffect(None)
 
     def center_on_screen(self):
         screen = QGuiApplication.primaryScreen().availableGeometry()

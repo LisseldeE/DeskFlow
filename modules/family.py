@@ -91,7 +91,7 @@ class FamilyWindowRegistry:
         window's HWND rect.
 
         Uses Win32 GetWindowRect on every recorded HWND — this is the
-        source of truth for "did the click land on a DeskFlow window?",
+        source of truth for "did the click land on a CapRise window?",
         because it accounts for the actual on-screen geometry of our
         frameless Qt.Tool windows (Qt's geometry() can disagree with
         the OS for WA_TranslucentBackground windows).

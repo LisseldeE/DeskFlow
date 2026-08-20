@@ -1,4 +1,4 @@
-"""About page and check-for-update logic for DeskFlow.
+"""About page and check-for-update logic for CapRise.
 
 The update check mirrors the reference LANSyncBox implementation: it picks
 GitHub or Gitee based on the UI language, fetches that repo's Renew.json
@@ -9,11 +9,11 @@ import json
 import urllib.request
 import urllib.error
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QPushButton, QMessageBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox,
     QApplication, QFrame
 )
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QPalette
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QPalette, QFont, QFontMetrics, QEnterEvent, QColor
 
 from modules.config import Config
 from modules.i18n import I18n
@@ -126,6 +126,44 @@ def _section_label(text):
     return label
 
 
+class ClickableLabel(QLabel):
+    """Clickable link label with hover underline (mirrors LANSyncBox).
+
+    Used for the "查看详情" / "问题反馈" links on the About page."""
+
+    clicked = Signal()
+
+    def __init__(self, text, normal_color, hover_color):
+        super().__init__(text)
+        self._normal_color = normal_color
+        self._hover_color = hover_color
+        self._original_font = self.font()
+        self.setStyleSheet(
+            f"QLabel {{ font-size: 12px; color: {normal_color}; }}")
+        self.setCursor(Qt.PointingHandCursor)
+
+    def enterEvent(self, event):
+        if isinstance(event, QEnterEvent):
+            self.setStyleSheet(
+                f"QLabel {{ font-size: 12px; color: {self._hover_color}; }}")
+            font = QFont(self._original_font)
+            font.setUnderline(True)
+            self.setFont(font)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.setStyleSheet(
+            f"QLabel {{ font-size: 12px; color: {self._normal_color}; }}")
+        font = QFont(self._original_font)
+        font.setUnderline(False)
+        self.setFont(font)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+
+
 class AboutPage(QWidget):
     """About settings page: app info + check-for-update button."""
 
@@ -143,6 +181,11 @@ class AboutPage(QWidget):
             c = QApplication.palette().color(QPalette.Highlight)
             return f"#{c.red():02x}{c.green():02x}{c.blue():02x}"
 
+        accent = QColor(_accent_hex())
+        hover = accent.lighter(130) if accent.lightness() < 128 \
+            else accent.darker(115)
+        hover_hex = f"#{hover.red():02x}{hover.green():02x}{hover.blue():02x}"
+
         title = QLabel(Config.APP_NAME)
         title.setAlignment(Qt.AlignLeft)
         title.setStyleSheet(f"font-size: 26px; font-weight: bold; "
@@ -158,7 +201,9 @@ class AboutPage(QWidget):
         author.setStyleSheet("font-size: 11px; color: #868e96;")
         layout.addWidget(author)
 
-        repo = _section_label(f"GitHub: {Config.GITHUB_REPO}")
+        # GitHub repo link — clickable, opens the repository page.
+        repo = ClickableLabel(f"GitHub: {Config.GITHUB_REPO}", "#868e96", hover_hex)
+        repo.clicked.connect(self._open_github)
         layout.addWidget(repo)
 
         line = QFrame(self)
@@ -168,10 +213,35 @@ class AboutPage(QWidget):
         layout.addWidget(line)
         layout.addSpacing(6)
 
+        # Link row: 问题反馈 opens the GitHub issues page, 查看详情 opens
+        # the author's project homepage (mirrors LANSyncBox).
+        link_row = QHBoxLayout()
+        link_row.setSpacing(20)
+        feedback_link = ClickableLabel(
+            I18n.tr("about_feedback"), _accent_hex(), hover_hex)
+        feedback_link.clicked.connect(self._open_issues)
+        link_row.addWidget(feedback_link)
+        details_link = ClickableLabel(
+            I18n.tr("about_details"), _accent_hex(), hover_hex)
+        details_link.clicked.connect(self._open_details)
+        link_row.addWidget(details_link)
+        link_row.addStretch()
+        layout.addLayout(link_row)
+
         if Config.ENABLE_CHECK_UPDATE:
+            # 检查更新 sits below the link row and spans the same width as
+            # the two links together (text width + 20 px spacing).
+            link_font = QFont(self.font())
+            link_font.setPixelSize(12)
+            fm = QFontMetrics(link_font)
+            links_width = (
+                fm.horizontalAdvance(I18n.tr("about_feedback"))
+                + 20
+                + fm.horizontalAdvance(I18n.tr("about_details"))
+            )
             check_btn = QPushButton(I18n.tr("about_check_update"))
             check_btn.setCursor(Qt.PointingHandCursor)
-            check_btn.setFixedSize(140, 34)
+            check_btn.setFixedSize(links_width, 34)
             check_btn.setStyleSheet(
                 f"QPushButton {{ background: {_accent_hex()}; color: white;"
                 f" border: none; border-radius: 8px; font-size: 13px; }}"
@@ -181,3 +251,17 @@ class AboutPage(QWidget):
             layout.addWidget(check_btn, alignment=Qt.AlignLeft)
 
         layout.addStretch()
+
+    def _open_github(self):
+        """Open the GitHub repository page."""
+        QDesktopServices.openUrl(
+            QUrl(f"https://github.com/{Config.GITHUB_REPO}"))
+
+    def _open_issues(self):
+        """Open the GitHub issues page (问题反馈)."""
+        QDesktopServices.openUrl(
+            QUrl(f"https://github.com/{Config.GITHUB_REPO}/issues"))
+
+    def _open_details(self):
+        """Open the author's project homepage (查看详情)."""
+        QDesktopServices.openUrl(QUrl(Config.APP_AUTHOR_LINK))

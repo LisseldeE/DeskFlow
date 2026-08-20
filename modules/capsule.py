@@ -190,7 +190,7 @@ class CapsuleBar(QWidget):
         self.hide_family_requested.emit()
 
     def shutdown(self):
-        """Release OS resources. Call from DeskFlow.exit_app before quit."""
+        """Release OS resources. Call from CapRise.exit_app before quit."""
         self._mouse_hook.uninstall()
 
     def event(self, event):

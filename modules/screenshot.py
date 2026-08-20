@@ -70,7 +70,7 @@ class ScreenshotOverlay(BaseOverlay):
             if sel_rect.width() > 5 and sel_rect.height() > 5:
                 captured = self.desktop_pixmap.copy(
                     pixel_source(self.desktop_pixmap, sel_rect))
-                # Emit closed signal before closing (so DeskFlow clears active_overlay)
+                # Emit closed signal before closing (so CapRise clears active_overlay)
                 self.closed.emit()
                 # Close overlay first
                 self.close()

@@ -1,16 +1,16 @@
 <p align="center">
-  <img src="https://lisseldee.github.io/assets/images/webp/7-e.webp" width="100%" alt="DeskFlow">
+  <img src="https://lisseldee.github.io/assets/images/webp/7-e.webp" width="100%" alt="CapRise">
 </p>
 
 <div align="center">
 
-[![](https://img.shields.io/badge/-简体中文-3b82f6?style=flat)](https://github.com/LisseldeE/DeskFlow/blob/main/README.md) [![](https://img.shields.io/badge/-English-555555?style=flat)](https://github.com/LisseldeE/DeskFlow/blob/main/README_EN.md)
+[![](https://img.shields.io/badge/-简体中文-3b82f6?style=flat)](https://github.com/LisseldeE/CapRise/blob/main/README.md) [![](https://img.shields.io/badge/-English-555555?style=flat)](https://github.com/LisseldeE/CapRise/blob/main/README_EN.md)
 
 </div>
 
 ## 项目简介
 
-DeskFlow 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热键 <kbd>Ctrl</kbd> + <kbd>·</kbd> 唤起悬浮胶囊，截图、翻译、标注、局域网剪切板同步等日常办公所需，一触即达。
+CapRise 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热键 <kbd>Ctrl</kbd> + <kbd>·</kbd> 唤起悬浮胶囊，截图、翻译、标注、局域网剪切板同步等日常办公所需，一触即达。
 
 ## 项目截图
 
@@ -18,10 +18,10 @@ DeskFlow 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热�
 
 ## 项目信息
 
-- **项目名称**: DeskFlow
+- **项目名称**: CapRise
 - **项目作者**: Lisselde_E
 - **项目主页**: https://lisseldee.github.io/#7
-- **项目仓库**: https://github.com/LisseldeE/DeskFlow
+- **项目仓库**: https://github.com/LisseldeE/CapRise
 
 ## 使用方法
 
@@ -81,7 +81,7 @@ DeskFlow 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热�
 
 ## 更新日志
 
-详见 [更新日志](https://github.com/LisseldeE/DeskFlow/blob/main/CHANGELOG.md)
+详见 [更新日志](https://github.com/LisseldeE/CapRise/blob/main/CHANGELOG.md)
 
 ## 技术栈
 
@@ -114,14 +114,14 @@ pip install -r requirements.txt
 ### 运行程序
 
 ```bash
-python DeskFlow.py
+python CapRise.py
 ```
 
 ## 项目结构
 
 ```
-DeskFlow/
-├── DeskFlow.py              # 主入口
+CapRise/
+├── CapRise.py              # 主入口
 ├── icon.ico                 # 程序图标
 ├── README.md                # 中文说明
 ├── README_EN.md             # 英文说明
@@ -152,7 +152,7 @@ DeskFlow/
 
 ## 配置
 
-配置文件存储在用户目录下的 `DeskFlow/config.json`，包含以下设置：
+配置文件存储在用户目录下的 `CapRise/config.json`，包含以下设置：
 
 - `language`：界面语言（zh_CN / en）
 - `autostart`：开机自启（true / false）
@@ -165,7 +165,7 @@ DeskFlow/
 
 ## 开源声明
 
-本项目采用 MIT 开源协议，详见 [LICENSE](https://github.com/LisseldeE/DeskFlow/blob/main/LICENSE) 文件。
+本项目采用 MIT 开源协议，详见 [LICENSE](https://github.com/LisseldeE/CapRise/blob/main/LICENSE) 文件。
 
 ## 反馈
 

@@ -1,16 +1,16 @@
 <p align="center">
-  <img src="https://lisseldee.github.io/assets/images/webp/7-e.webp" width="100%" alt="DeskFlow">
+  <img src="https://lisseldee.github.io/assets/images/webp/7-e.webp" width="100%" alt="CapRise">
 </p>
 
 <div align="center">
 
-[![](https://img.shields.io/badge/-简体中文-555555?style=flat)](https://github.com/LisseldeE/DeskFlow/blob/main/README.md) [![](https://img.shields.io/badge/-English-3b82f6?style=flat)](https://github.com/LisseldeE/DeskFlow/blob/main/README_EN.md)
+[![](https://img.shields.io/badge/-简体中文-555555?style=flat)](https://github.com/LisseldeE/CapRise/blob/main/README.md) [![](https://img.shields.io/badge/-English-3b82f6?style=flat)](https://github.com/LisseldeE/CapRise/blob/main/README_EN.md)
 
 </div>
 
 ## Project Introduction
 
-DeskFlow is a PySide6-based Windows desktop quick toolbar. Use the global hotkey <kbd>Ctrl</kbd> + <kbd>·</kbd> to summon a floating capsule, providing quick access to screenshot, translation, annotation, LAN clipboard sync, and other daily office tools at your fingertips.
+CapRise is a PySide6-based Windows desktop quick toolbar. Use the global hotkey <kbd>Ctrl</kbd> + <kbd>·</kbd> to summon a floating capsule, providing quick access to screenshot, translation, annotation, LAN clipboard sync, and other daily office tools at your fingertips.
 
 ## 项目截图
 
@@ -18,10 +18,10 @@ DeskFlow is a PySide6-based Windows desktop quick toolbar. Use the global hotkey
 
 ## Project Information
 
-- **Project Name**: DeskFlow
+- **Project Name**: CapRise
 - **Project Author**: Lisselde_E
 - **Project Homepage**: https://lisseldee.github.io/#7
-- **Project Repository**: https://github.com/LisseldeE/DeskFlow
+- **Project Repository**: https://github.com/LisseldeE/CapRise
 
 ## Usage
 
@@ -81,7 +81,7 @@ DeskFlow is a PySide6-based Windows desktop quick toolbar. Use the global hotkey
 
 ## Changelog
 
-See [Changelog](https://github.com/LisseldeE/DeskFlow/blob/main/CHANGELOG.md)
+See [Changelog](https://github.com/LisseldeE/CapRise/blob/main/CHANGELOG.md)
 
 ## Tech Stack
 
@@ -114,14 +114,14 @@ pip install -r requirements.txt
 ### Run the Application
 
 ```bash
-python DeskFlow.py
+python CapRise.py
 ```
 
 ## Project Structure
 
 ```
-DeskFlow/
-├── DeskFlow.py              # Main entry point
+CapRise/
+├── CapRise.py              # Main entry point
 ├── icon.ico                 # Application icon
 ├── README.md                # Chinese documentation
 ├── README_EN.md             # English documentation
@@ -152,7 +152,7 @@ DeskFlow/
 
 ## Configuration
 
-Configuration file is stored at `DeskFlow/config.json` under the user home directory, with the following settings:
+Configuration file is stored at `CapRise/config.json` under the user home directory, with the following settings:
 
 - `language`: Interface language (zh_CN / en)
 - `autostart`: Auto-start on boot (true / false)
@@ -165,7 +165,7 @@ Clipboard history is stored in `clipboard_history.db` (SQLite) in the same direc
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](https://github.com/LisseldeE/DeskFlow/blob/main/LICENSE) file for details.
+This project is licensed under the MIT License. See [LICENSE](https://github.com/LisseldeE/CapRise/blob/main/LICENSE) file for details.
 
 ## Feedback
 
