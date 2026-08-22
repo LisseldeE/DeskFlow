@@ -79,6 +79,14 @@ CapRise 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热键
 - **开机自启**：设置开机自动启动，状态持久化保存
 - **关于页**：查看版本、作者、仓库信息，并支持检查更新
 
+### 全局搜索
+- **快捷唤起**：输入即搜，支持计算、已安装软件与全局文件三类结果
+- **计算表达式**：直接输入算式（如 `1+2*3`、`sqrt(16)`），即时返回结果并支持一键复制
+- **已安装软件**：从注册表读取已安装程序，实时模糊匹配，回车即可启动
+- **全局文件**：基于 [Everything](https://www.voidtools.com/) 的文件索引能力，通过其命令行工具 `es.exe` 实现全盘毫秒级检索（含中文路径），点击直接打开
+- **结果悬浮高亮**：鼠标悬浮或方向键上下移动，蓝色指示条实时跟随当前项
+- **开关状态持久化**：全局文件、安装软件两个开关状态写入配置文件，重启后保持
+
 ## 更新日志
 
 详见 [更新日志](https://github.com/LisseldeE/CapRise/blob/main/CHANGELOG.md)
@@ -93,6 +101,7 @@ CapRise 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热键
 - **JSON**：配置文件持久化
 - **Socket（UDP + TCP）**：局域网剪切板发现与中继
 - **SQLite**：剪切板历史持久化
+- **Everything（es.exe）**：全局文件搜索的后端索引与检索引擎
 
 ## 安装与运行
 
@@ -160,12 +169,18 @@ CapRise/
 - `clipboard_expanded`：剪切板浮层是否展开（true / false）
 - `clipboard_room`：剪切板房间号（6 位数字）
 - `translate_target_lang`：翻译目标语言（zh-CN / zh-TW / en / ja / ko）
+- `search_files_enabled`：全局文件搜索开关（true / false）
+- `search_apps_enabled`：已安装软件搜索开关（true / false）
 
 剪切板历史存储在同目录下的 `clipboard_history.db`（SQLite）。
 
 ## 开源声明
 
 本项目采用 MIT 开源协议，详见 [LICENSE](https://github.com/LisseldeE/CapRise/blob/main/LICENSE) 文件。
+
+## 致谢
+
+本项目全局文件搜索功能引用并依赖 [Everything](https://www.voidtools.com/) 的索引与检索引擎（通过其命令行工具 `es.exe` 调用），感谢 Everything 开发者 David Carpenter 及 Everything 开发团队为用户提供如此优秀的本地文件搜索工具。Everything 采用 MIT 许可证，其官网为 [https://www.voidtools.com/](https://www.voidtools.com/)。
 
 ## 反馈
 

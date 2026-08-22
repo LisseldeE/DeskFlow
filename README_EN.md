@@ -79,6 +79,14 @@ CapRise is a PySide6-based Windows desktop quick toolbar. Use the global hotkey 
 - **Auto-start**: Set to launch on system boot, persisted to configuration
 - **About Page**: View version, author, and repository info, with check-for-update support
 
+### Global Search
+- **Type-to-search**: One input box covers calculations, installed apps, and global files
+- **Expression Calculator**: Type an expression directly (e.g. `1+2*3`, `sqrt(16)`) for an instant result with one-click copy
+- **Installed Apps**: Matches installed programs read from the registry, launch with Enter
+- **Global Files**: Powered by [Everything](https://www.voidtools.com/)'s file index via its command-line tool `es.exe` — near-instant whole-disk search (Chinese paths included), click to open
+- **Hover Highlight**: The blue selection bar follows the cursor in real time when hovering or using arrow keys
+- **Persistent Toggles**: The 全局文件 / 安装软件 switch states are saved to the config file and restored on restart
+
 ## Changelog
 
 See [Changelog](https://github.com/LisseldeE/CapRise/blob/main/CHANGELOG.md)
@@ -93,6 +101,7 @@ See [Changelog](https://github.com/LisseldeE/CapRise/blob/main/CHANGELOG.md)
 - **JSON**: Configuration file persistence
 - **Socket (UDP + TCP)**: LAN clipboard discovery and relay
 - **SQLite**: Clipboard history persistence
+- **Everything (es.exe)**: Backend index & retrieval engine for global file search
 
 ## Installation & Running
 
@@ -160,12 +169,18 @@ Configuration file is stored at `CapRise/config.json` under the user home direct
 - `clipboard_expanded`: Whether the clipboard panel is expanded (true / false)
 - `clipboard_room`: Clipboard room code (6-digit number)
 - `translate_target_lang`: Translate target language (zh-CN / zh-TW / en / ja / ko)
+- `search_files_enabled`: Whether global file search is enabled (true / false)
+- `search_apps_enabled`: Whether installed-app search is enabled (true / false)
 
 Clipboard history is stored in `clipboard_history.db` (SQLite) in the same directory.
 
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](https://github.com/LisseldeE/CapRise/blob/main/LICENSE) file for details.
+
+## Acknowledgments
+
+The global file search feature of this project references and depends on [Everything](https://www.voidtools.com/)'s index and retrieval engine (invoked through its command-line tool `es.exe`). Thanks to Everything's developer David Carpenter and the Everything team for providing such an excellent local file search tool. Everything is licensed under the MIT License, and its official website is [https://www.voidtools.com/](https://www.voidtools.com/).
 
 ## Feedback
 

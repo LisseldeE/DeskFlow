@@ -569,12 +569,18 @@ class ToggleSwitch(QAbstractButton):
 class ResultRow(QWidget):
     """A selectable result row: leading icon + title + secondary line."""
 
-    clicked = Signal()
+    # Emits the row itself so the parent can resolve its index in the list.
+    clicked = Signal(object)
+    # Emitted when the mouse enters / leaves the row; the parent moves the
+    # blue selection bar to follow the mouse in real time (hover highlight).
+    hovered = Signal(object)
+    left = Signal(object)
 
     def __init__(self, icon, title, subtitle, title_accent=False, parent=None):
         super().__init__(parent)
         self.setFixedHeight(44)
         self.setCursor(Qt.PointingHandCursor)
+        self.setMouseTracking(True)
         self._selected = False
         self._title_accent = title_accent
         if isinstance(icon, str):
@@ -593,6 +599,9 @@ class ResultRow(QWidget):
         icon_lbl = QLabel()
         icon_lbl.setFixedSize(26, 26)
         icon_lbl.setPixmap(self._icon_pix)
+        # Let the mouse events pass through to the row itself so enter/leave
+        # (and the hover highlight) track the whole row, not its children.
+        icon_lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
         lay.addWidget(icon_lbl)
 
         text_lay = QVBoxLayout()
@@ -600,6 +609,8 @@ class ResultRow(QWidget):
         text_lay.setSpacing(0)
         self._title_lbl = QLabel(title)
         self._sub_lbl = QLabel(subtitle)
+        self._title_lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._sub_lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
         self._title_lbl.setSizePolicy(
             self._title_lbl.sizePolicy().horizontalPolicy(), self._title_lbl.sizePolicy().verticalPolicy())
         text_lay.addWidget(self._title_lbl)
@@ -639,8 +650,16 @@ class ResultRow(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.clicked.emit()
+            self.clicked.emit(self)
         super().mousePressEvent(event)
+
+    def enterEvent(self, event):
+        self.hovered.emit(self)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.left.emit(self)
+        super().leaveEvent(event)
 
 
 class SectionLabel(QLabel):
@@ -801,7 +820,8 @@ class SearchWindow(QWidget):
         else:
             self.switch_files.setChecked(False)
         self.switch_apps = ToggleSwitch(I18n.tr("search_installed_apps"))
-        self.switch_apps.setChecked(True)
+        # Restore the persisted 安装软件 switch (default on).
+        self.switch_apps.setChecked(Config().get("search_apps_enabled", True))
         toggles.addWidget(self.switch_files)
         toggles.addWidget(self.switch_apps)
         toggles.addStretch()
@@ -1070,6 +1090,8 @@ class SearchWindow(QWidget):
             self._debounce.start()
 
     def _on_scope_changed(self, _=None):
+        # Persist the 安装软件 switch so it survives restarts (default on).
+        Config().set("search_apps_enabled", self.switch_apps.isChecked())
         self._rebuild_results()
 
     def _on_index_poll(self):
@@ -1377,6 +1399,8 @@ class SearchWindow(QWidget):
         if tooltip:
             row.setToolTip(tooltip)
         row.clicked.connect(self._on_row_clicked)
+        row.hovered.connect(self._on_row_hovered)
+        row.left.connect(self._on_row_left)
         if section is not None:
             idx = self.results_layout.indexOf(section)
             if idx >= 0:
@@ -1480,6 +1504,24 @@ class SearchWindow(QWidget):
                 self._select(i)
                 self._activate_selection()
                 break
+
+    def _nav_index_of(self, row):
+        for i, (r, _) in enumerate(self._nav):
+            if r is row:
+                return i
+        return -1
+
+    def _on_row_hovered(self, row):
+        """Mouse entered a result row: move the blue selection bar to it so
+        the highlight follows the cursor in real time."""
+        idx = self._nav_index_of(row)
+        if idx >= 0:
+            self._select(idx)
+
+    def _on_row_left(self, row):
+        # The bar simply follows the mouse; leaving a row keeps the current
+        # selection (keyboard arrows can still move it afterwards).
+        pass
 
     def _activate_selection(self):
         if not (0 <= self._selected < len(self._nav)):
