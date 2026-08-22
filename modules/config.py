@@ -7,7 +7,7 @@ class Config:
 
     # --- App info (used by the About page / check-for-update) ---
     APP_NAME = "CapRise"
-    APP_VERSION = "1.1.2.0"
+    APP_VERSION = "1.1.3.0"
     APP_AUTHOR = "Lisselde_E"
     APP_AUTHOR_LINK = "https://lisseldee.github.io/#7"  # 项目主页链接
 
@@ -56,6 +56,20 @@ class Config:
             json.dumps(self._config, indent=2, ensure_ascii=False),
             encoding="utf-8"
         )
+
+    def update_reference_info(self, exe_path):
+        """Record app name / version / own exe location into config.json.
+
+        Mirrors LANSyncBox's update_reference_info: the installer's update
+        flow reads these keys to locate the running exe and compare the
+        installed version before replacing the file."""
+        if not self.ENABLE_CHECK_UPDATE:
+            return
+        self._load()
+        self._config["version"] = self.APP_VERSION
+        self._config["exe_path"] = exe_path
+        self._config["app_name"] = self.APP_NAME
+        self.save()
 
     def get(self, key, default=None):
         self._load()

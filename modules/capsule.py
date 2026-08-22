@@ -144,6 +144,20 @@ class CapsuleBar(QWidget):
         self.btn_clipboard = self._tool_buttons["clipboard"]
         self.btn_search = self._tool_buttons["search"]
 
+        # Apply the user's per-tool show/hide choice (config["hidden_tools"]).
+        self.set_tools_hidden(Config().get("hidden_tools", []))
+
+    def set_tools_hidden(self, hidden_keys):
+        """Show/hide tool buttons per the `hidden_tools` config list.
+
+        Hidden buttons stay in the layout with their signal connections and
+        global hotkey bindings intact — they just render invisible, so the
+        capsule stays compact while the user can still trigger them by
+        hotkey."""
+        hidden = set(hidden_keys or [])
+        for key, btn in self._tool_buttons.items():
+            btn.setVisible(key not in hidden)
+
     def reorder_tools(self, order):
         """Reorder the tool buttons to match `order` (a list of tool keys).
 

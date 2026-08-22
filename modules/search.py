@@ -913,8 +913,11 @@ class SearchWindow(QWidget):
         painter.setPen(Qt.NoPen)
         painter.drawRoundedRect(self.rect().adjusted(8, 8, -8, -8), 14, 14)
         painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(QColor(80, 80, 80, 255), 1))
-        painter.drawRoundedRect(self.rect().adjusted(8, 8, -9, -9), 14, 14)
+        # Family hairline (#505050) — kept on dark themes, dropped on light
+        # ones where it reads as a harsh black ring.
+        if self.palette().color(QPalette.Window).lightness() < 128:
+            painter.setPen(QPen(QColor(80, 80, 80, 255), 1))
+            painter.drawRoundedRect(self.rect().adjusted(8, 8, -9, -9), 14, 14)
 
     def showEvent(self, event):
         FamilyWindowRegistry.refresh_hwnd(self)

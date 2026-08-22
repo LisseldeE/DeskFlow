@@ -6,11 +6,11 @@ import sys
 import os
 import ctypes
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QKeySequence
 from PySide6.QtCore import Qt
 from modules.config import Config
 from modules.i18n import I18n
-from modules.hotkey import WinHotkeyFilter, register_hotkey, unregister_hotkey
+from modules.hotkey import HotkeyManager, HOTKEY_SPECS, qkeysequence_to_win
 from modules.capsule import CapsuleBar
 from modules.screenshot import ScreenshotOverlay
 from modules.annotation import AnnotationOverlay
@@ -21,7 +21,7 @@ from modules.search import SearchWindow
 
 
 def set_app_user_model_id():
-    """Set the Windows AppUserModelID so the taskbar groups the window with
+    """Set the Windows AppUserModelID so the taskbar groups the window with`
     the tray icon under CapRise instead of the generic python icon.
 
     Must run before the QApplication (i.e. before any window) is created,
@@ -61,6 +61,26 @@ class CapRiseApp:
         # Set the AppUserModelID before any window / QApplication exists so
         # the taskbar shows the CapRise icon. Mirrors icon_set.md.
         set_app_user_model_id()
+
+        # Record app name / version / own exe location into config.json so
+        # the installer's update flow can find and replace the running exe.
+        # Mirrors LANSyncBox's startup logic.
+        if Config.ENABLE_CHECK_UPDATE:
+            try:
+                if "__compiled__" in globals():
+                    # Nuitka build: the exe sits next to the compiled module.
+                    exe_path = os.path.join(
+                        __compiled__.containing_dir,
+                        Config.APP_NAME + ".exe")
+                elif getattr(sys, "frozen", False):
+                    # PyInstaller build: sys.executable is the exe itself.
+                    exe_path = sys.executable
+                else:
+                    # Dev run: the main script itself.
+                    exe_path = os.path.abspath(__file__)
+                Config().update_reference_info(exe_path)
+            except Exception:
+                pass  # Never block startup on a config write failure.
 
         self.app = QApplication(sys.argv)
         self.app.setQuitOnLastWindowClosed(False)
@@ -109,10 +129,39 @@ class CapRiseApp:
         self.tray_icon.show()
 
     def setup_hotkey(self):
-        self.hotkey_filter = WinHotkeyFilter(self.toggle_capsule)
-        self.app.installNativeEventFilter(self.hotkey_filter)
-        if not register_hotkey():
-            print("Warning: Failed to register hotkey (maybe already in use)")
+        """Build the hotkey manager and register every configured global
+        hotkey. Settings may later re-register them live through the same
+        manager."""
+        self.hotkey_mgr = HotkeyManager(self._on_hotkey_fired)
+        # Pair callbacks with specs by config key so the ids in HOTKEY_SPECS
+        # stay the single source of truth.
+        callbacks = {
+            "hotkey_capsule": self.toggle_capsule,
+            "hotkey_screenshot": self._on_screenshot,
+            "hotkey_annotation": self._on_annotation,
+            "hotkey_translate": self._on_translate,
+            "hotkey_clipboard": self.clipboard_mgr.on_button_left,
+            "hotkey_search": self._on_search,
+            "hotkey_settings": self._on_settings,
+        }
+        self._hotkey_callbacks = {}
+        for hotkey_id, cfg_key, _label, default_seq in HOTKEY_SPECS:
+            self._hotkey_callbacks[hotkey_id] = callbacks.get(cfg_key)
+            seq_text = Config().get(cfg_key, default_seq)
+            if not seq_text:
+                self.hotkey_mgr.register(hotkey_id, 0, 0)
+                continue
+            qseq = QKeySequence.fromString(seq_text, QKeySequence.PortableText)
+            mod, vk = qkeysequence_to_win(qseq)
+            if vk == 0:
+                continue
+            if not self.hotkey_mgr.register(hotkey_id, mod, vk):
+                print(f"Warning: hotkey {seq_text} unavailable (already in use)")
+
+    def _on_hotkey_fired(self, hotkey_id):
+        callback = self._hotkey_callbacks.get(hotkey_id)
+        if callback is not None:
+            callback()
 
     def connect_signals(self):
         self.capsule.btn_screenshot.clicked.connect(self._on_screenshot)
@@ -241,7 +290,7 @@ class CapRiseApp:
                 self._open_search()
 
     def _on_settings(self):
-        dialog = SettingsDialog(capsule=self.capsule)
+        dialog = SettingsDialog(capsule=self.capsule, hotkey_mgr=self.hotkey_mgr)
         dialog.exec()
 
     def _on_overlay_closed(self, overlay):
@@ -258,7 +307,7 @@ class CapRiseApp:
         # tear down the rest of the family.
         self.capsule.shutdown()
         self.clipboard_mgr.shutdown()
-        unregister_hotkey()
+        self.hotkey_mgr.shutdown()
         self.app.quit()
 
     def run(self):

@@ -402,10 +402,12 @@ class ClipboardPanel(QWidget):
         painter.setPen(Qt.NoPen)
         painter.drawRoundedRect(self.rect().adjusted(8, 8, -8, -8), 14, 14)
         # 1px dark gray border (matches capsule). #505050 reads on both
-        # light and dark themes without the harshness of pure white.
+        # light and dark themes without the harshness of pure white — but on
+        # a light theme it comes across as a black ring, so it is dropped.
         painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(QColor(80, 80, 80, 255), 1))
-        painter.drawRoundedRect(self.rect().adjusted(8, 8, -9, -9), 14, 14)
+        if self.palette().color(QPalette.Window).lightness() < 128:
+            painter.setPen(QPen(QColor(80, 80, 80, 255), 1))
+            painter.drawRoundedRect(self.rect().adjusted(8, 8, -9, -9), 14, 14)
 
     def showEvent(self, event):
         # Apply WS_EX_NOACTIVATE once the HWND exists so mouse clicks on the

@@ -75,8 +75,11 @@ def paint_pill(painter, rect, radius):
     painter.drawRoundedRect(rect, radius, radius)
 
     painter.setBrush(Qt.NoBrush)
-    painter.setPen(QPen(QColor(80, 80, 80, 255), 1))
-    painter.drawRoundedRect(rect.adjusted(0, 0, -1, -1), radius, radius)
+    # The #505050 hairline keeps the pill defined on dark themes; on a
+    # light background it reads as a harsh black ring, so it is dropped.
+    if is_dark:
+        painter.setPen(QPen(QColor(80, 80, 80, 255), 1))
+        painter.drawRoundedRect(rect.adjusted(0, 0, -1, -1), radius, radius)
 
     # Soft catch-light across the flat top edge. Only drawn on dark themes —
     # a white line is invisible on a light pill anyway.

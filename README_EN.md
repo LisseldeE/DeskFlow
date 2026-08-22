@@ -75,7 +75,8 @@ CapRise is a PySide6-based Windows desktop quick toolbar. Use the global hotkey 
 ### Settings Features
 - **Language Switching**: Toggle between Chinese and English, takes effect immediately without restart
 - **Translate Target Language**: Configure the translation target language, takes effect immediately
-- **Hotkey Display**: View current global hotkey binding
+- **Hotkey Configuration**: Assign custom global hotkeys per feature, applied instantly; supports per-row clear and one-click reset to defaults — the reset skips occupancy checks and runs in two passes so it takes effect immediately
+- **Tool Order**: Drag to reorder the tools in the capsule and click the eye icon to show/hide each one; items show no selection/focus highlight on click for a cleaner look
 - **Auto-start**: Set to launch on system boot, persisted to configuration
 - **About Page**: View version, author, and repository info, with check-for-update support
 
