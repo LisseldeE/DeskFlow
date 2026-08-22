@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QRect, Signal
 from PySide6.QtGui import QPainter, QColor, QPen, QPixmap, QGuiApplication, QFont, QPalette
-from modules.overlay import BaseOverlay, pixel_source
+from modules.overlay import BaseOverlay, pixel_source, draw_snapshot
 from modules.i18n import I18n
 from datetime import datetime
 
@@ -39,10 +39,11 @@ class ScreenshotOverlay(BaseOverlay):
         if self.start_point and self.end_point and self.is_dragging:
             sel_rect = QRect(self.start_point, self.end_point).normalized()
 
-            # Cut out the selection area - show desktop content
+            # Cut out the selection area - show desktop content. Painted 1:1
+            # from the grab's physical pixels so HiDPI scaling never makes
+            # the text inside wobble while dragging.
             painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-            painter.drawPixmap(sel_rect, self.desktop_pixmap,
-                               pixel_source(self.desktop_pixmap, sel_rect))
+            draw_snapshot(painter, self.desktop_pixmap, sel_rect)
 
             # Draw selection border (theme-aware color, no corner handles)
             border_color = _selection_color()

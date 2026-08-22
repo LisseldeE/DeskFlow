@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtSvg import QSvgRenderer
 
-from modules.overlay import BaseOverlay, pixel_source
+from modules.overlay import BaseOverlay, pixel_source, draw_snapshot
 from modules.i18n import I18n
 from modules.config import Config
 from modules.icons import ICON_COPY, ICON_CHECK
@@ -658,8 +658,9 @@ class TranslateOverlay(BaseOverlay):
             rect = self.sel_rect
 
         if rect:
-            painter.drawPixmap(rect, self.desktop_pixmap,
-                               pixel_source(self.desktop_pixmap, rect))
+            # 1:1 physical-pixel paint so HiDPI scaling never makes the text
+            # inside the selection wobble while dragging.
+            draw_snapshot(painter, self.desktop_pixmap, rect)
             painter.setPen(QPen(_selection_color(), 2))
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(rect)

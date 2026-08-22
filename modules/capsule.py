@@ -9,7 +9,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QPainter, QColor, QGuiApplication, QKeyEvent, QCursor
 from modules.icons import (
     ICON_SCREENSHOT, ICON_ANNOTATION, ICON_TRANSLATE, ICON_SETTINGS,
-    ICON_CLOSE, ICON_CLIPBOARD
+    ICON_CLOSE, ICON_CLIPBOARD, ICON_SEARCH
 )
 from modules.i18n import I18n
 from modules.family import FamilyWindowRegistry
@@ -62,7 +62,7 @@ class CapsuleBar(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         # Never steal focus on show — the user's caret stays in their input.
         self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setFixedSize(342, 56)
+        self.setFixedSize(396, 56)
 
         self._animating = False
         self._pending_hide = False
@@ -93,16 +93,18 @@ class CapsuleBar(QWidget):
         layout.setSpacing(10)
         layout.setContentsMargins(14, 6, 14, 6)
 
-        # The four tool buttons are built in the user-defined order (stored
+        # The five tool buttons are built in the user-defined order (stored
         # in config["tool_order"]); Settings and Close stay pinned at the end.
         tool_specs = {
             "screenshot": (ICON_SCREENSHOT, "screenshot"),
             "annotation": (ICON_ANNOTATION, "annotation"),
             "translate": (ICON_TRANSLATE, "translate"),
             "clipboard": (ICON_CLIPBOARD, "clipboard"),
+            "search": (ICON_SEARCH, "search"),
         }
         order = Config().get(
-            "tool_order", ["screenshot", "annotation", "translate", "clipboard"])
+            "tool_order",
+            ["screenshot", "annotation", "translate", "clipboard", "search"])
 
         # All capsule icons must keep their original colour on hover (task 1):
         # only the translucent plate animates, never a colour tint on the SVG.
@@ -140,20 +142,31 @@ class CapsuleBar(QWidget):
         self.btn_annotation = self._tool_buttons["annotation"]
         self.btn_translate = self._tool_buttons["translate"]
         self.btn_clipboard = self._tool_buttons["clipboard"]
+        self.btn_search = self._tool_buttons["search"]
 
     def reorder_tools(self, order):
         """Reorder the tool buttons to match `order` (a list of tool keys).
 
         The existing button objects are reused and only their position in the
         layout changes, so the signal connections made in CapRiseApp stay
-        valid. Settings and Close always remain pinned at the end."""
+        valid. Settings and Close always remain pinned at the end.
+
+        A stale saved order (e.g. from before a new tool was added) is
+        tolerated: any tool missing from `order` is appended so the capsule
+        never loses a button."""
         layout = self.layout()
         for btn in self._tool_buttons.values():
             layout.removeWidget(btn)
         anchor = self.btn_settings  # insert before Settings
+        inserted = set()
         for key in order:
             btn = self._tool_buttons.get(key)
             if btn is not None:
+                layout.insertWidget(layout.indexOf(anchor), btn)
+                inserted.add(key)
+        # Append tools missing from the saved order (new tools, stale config).
+        for key, btn in self._tool_buttons.items():
+            if key not in inserted:
                 layout.insertWidget(layout.indexOf(anchor), btn)
 
     def setup_shadow(self):

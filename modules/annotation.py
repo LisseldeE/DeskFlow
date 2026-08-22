@@ -10,7 +10,7 @@ from PySide6.QtGui import (
     QPainter, QColor, QPen, QFont, QGuiApplication, QFontMetrics,
     QPainterPath, QPalette, QBrush, QKeyEvent, QImage
 )
-from modules.overlay import BaseOverlay, pixel_source
+from modules.overlay import BaseOverlay, draw_snapshot
 from modules.icons import ICON_RECTANGLE, ICON_FREEFORM, ICON_TEXT, ICON_CLOSE
 from modules.i18n import I18n
 from modules.widgets import GlassIconButton, paint_pill
@@ -557,10 +557,11 @@ class AnnotationOverlay(BaseOverlay):
 
         if ann_type == "rectangle":
             rect = ann[1]
-            # Cut out the overlay - show desktop content inside the rectangle
+            # Cut out the overlay - show desktop content inside the rectangle.
+            # 1:1 physical-pixel paint so HiDPI scaling never wobbles the
+            # text while the rectangle is being drawn.
             painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-            painter.drawPixmap(rect, self.desktop_pixmap,
-                               pixel_source(self.desktop_pixmap, rect))
+            draw_snapshot(painter, self.desktop_pixmap, rect)
             # Draw border only (no fill)
             painter.setPen(QPen(border_color, 2))
             painter.setBrush(Qt.NoBrush)

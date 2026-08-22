@@ -500,6 +500,7 @@ class SettingsDialog(QDialog):
             "annotation": I18n.tr("annotation"),
             "translate": I18n.tr("translate"),
             "clipboard": I18n.tr("clipboard"),
+            "search": I18n.tr("search"),
         }
         self.tool_order_list.set_tool_labels(tool_labels, grip_pix)
 
@@ -510,7 +511,8 @@ class SettingsDialog(QDialog):
             self.tool_order_list.addItem(item)
 
         order = Config().get(
-            "tool_order", ["screenshot", "annotation", "translate", "clipboard"])
+            "tool_order",
+            ["screenshot", "annotation", "translate", "clipboard", "search"])
         for key in order:
             if key not in tool_labels:
                 continue

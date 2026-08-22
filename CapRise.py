@@ -17,6 +17,7 @@ from modules.annotation import AnnotationOverlay
 from modules.translate import TranslateOverlay
 from modules.settings import SettingsDialog, apply_autostart
 from modules.clipboard_manager import ClipboardManager
+from modules.search import SearchWindow
 
 
 def set_app_user_model_id():
@@ -74,6 +75,13 @@ class CapRiseApp:
 
         self.capsule = CapsuleBar()
         self.active_overlay = None
+        # Search card instance; created lazily on first entry to search mode
+        # and destroyed when it closes (closed -> _on_search_closed).
+        # _pending_search: re-entry requested while a card is mid-close;
+        # the new card is opened only after the old one fully closes, so
+        # two cards can never stack on screen.
+        self._search_window = None
+        self._pending_search = False
 
         # Clipboard manager wires itself to the capsule + panel and restores
         # persisted state (enabled / expanded / room / position) from config.
@@ -115,9 +123,20 @@ class CapRiseApp:
         # Clipboard: left-click toggles on/off, right-click opens room config.
         self.capsule.btn_clipboard.clicked.connect(self.clipboard_mgr.on_button_left)
         self.capsule.btn_clipboard.rightClicked.connect(self.clipboard_mgr.on_button_right)
+        # Search: enter/exit search mode. ESC and outside-clicks funnel through
+        # hide_family_requested (capsule side) and dismiss the search card too.
+        self.capsule.btn_search.clicked.connect(self._on_search)
+        self.capsule.hide_family_requested.connect(self._close_search)
 
     def toggle_capsule(self):
         if self.active_overlay is not None:
+            return
+        # Search mode: the hotkey exits search and restores the capsule.
+        if self._search_window is not None and self._search_window.isVisible():
+            # Explicit toggle-off — cancel any queued re-entry so the card
+            # doesn't unexpectedly reopen after the fade-out.
+            self._pending_search = False
+            self._search_window.close_search()
             return
         # When the LAN clipboard is enabled, Ctrl+` surfaces the capsule and
         # (if the user last left it expanded) the clipboard card together;
@@ -164,6 +183,62 @@ class CapRiseApp:
         overlay = TranslateOverlay()
         self.active_overlay = overlay
         overlay.closed.connect(lambda o=overlay: self._on_overlay_closed(o))
+
+    def _on_search(self):
+        """Enter search mode: hide the capsule family, surface the search card.
+
+        The card takes keyboard focus (unlike the capsule/panel which float
+        passively), so the user can type immediately. Closing the card
+        (ESC / outside-click / Enter on an action) emits `closed`; the
+        family stays hidden (like the annotation overlay) — the user
+        summons it again via Ctrl+`.
+
+        Re-entry is guarded against stacking: a previous card may still be
+        mid-close (fade-out runs for ~300ms plus a 400ms safety net). If we
+        created a brand-new card right away, both would be on screen and the
+        new one would "expand below" the old. Instead, when a card is still
+        closing we remember the re-entry and open the new card only after
+        the old one has fully closed (`_on_search_closed`). A card that is
+        already up (e.g. a double-click) is simply kept."""
+        if self._search_window is not None:
+            if self._search_window.is_closing:
+                self._pending_search = True
+            # else: card already on screen — no-op (no stacking).
+            return
+        self._open_search()
+
+    def _open_search(self):
+        """Create and show a fresh search card (re-entry queued until the
+        previous card is fully gone)."""
+        self._pending_search = False
+        self.clipboard_mgr.hide_family()
+        window = SearchWindow()
+        self._search_window = window
+        # Reference-safe: only clear the ref if it still points at THIS
+        # window — a stale window's late `closed` can't null a newer card.
+        window.closed.connect(lambda w=window: self._on_search_closed(w))
+        window.show_search()
+
+    def _close_search(self):
+        """Dismiss the search card when the family hides (ESC / outside-click).
+
+        The card's `closed` signal then fires _on_search_closed. Exiting
+        search behaves like the annotation overlay: the family stays hidden
+        (the capsule is NOT restored) — the user summons it again via Ctrl+`.
+        A queued re-entry is cancelled: ESC/outside-click is an explicit
+        "leave search" intent that overrides a pending re-open."""
+        self._pending_search = False
+        if self._search_window is not None:
+            self._search_window.close_search()
+
+    def _on_search_closed(self, window):
+        """Search card fully closed -> drop the reference (no capsule restore)."""
+        if self._search_window is window:
+            self._search_window = None
+            # A re-entry was requested while this card was still closing —
+            # open the new card now that no card is on screen.
+            if self._pending_search:
+                self._open_search()
 
     def _on_settings(self):
         dialog = SettingsDialog(capsule=self.capsule)

@@ -58,6 +58,34 @@ ICON_CLIPBOARD = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" 
   <path d="M9 11h6M9 15h4"/>
 </svg>"""
 
+# --- Search feature icons ---
+
+ICON_SEARCH = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="11" cy="11" r="7"/>
+  <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+</svg>"""
+
+ICON_APP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3" y="3" width="18" height="18" rx="3"/>
+  <path d="M3 9h18M9 21V9"/>
+</svg>"""
+
+ICON_FILE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+  <polyline points="14 2 14 8 20 8"/>
+</svg>"""
+
+ICON_CALC = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="4" y="2" width="16" height="20" rx="2"/>
+  <line x1="8" y1="6" x2="16" y2="6"/>
+  <line x1="8" y1="11" x2="8" y2="11.01"/>
+  <line x1="12" y1="11" x2="12" y2="11.01"/>
+  <line x1="16" y1="11" x2="16" y2="11.01"/>
+  <line x1="8" y1="16" x2="8" y2="16.01"/>
+  <line x1="12" y1="16" x2="12" y2="16.01"/>
+  <line x1="16" y1="16" x2="16" y2="16.01"/>
+</svg>"""
+
 ICON_COPY = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
   <rect x="9" y="9" width="11" height="11" rx="2"/>
   <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
@@ -99,6 +127,10 @@ def icon_svg(name):
         "text": ICON_TEXT,
         "translate": ICON_TRANSLATE,
         "clipboard": ICON_CLIPBOARD,
+        "search": ICON_SEARCH,
+        "app": ICON_APP,
+        "file": ICON_FILE,
+        "calc": ICON_CALC,
         "copy": ICON_COPY,
         "trash": ICON_TRASH,
         "network": ICON_NETWORK,
