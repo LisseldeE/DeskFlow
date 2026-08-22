@@ -914,10 +914,13 @@ class SearchWindow(QWidget):
         painter.drawRoundedRect(self.rect().adjusted(8, 8, -8, -8), 14, 14)
         painter.setBrush(Qt.NoBrush)
         # Family hairline (#505050) — kept on dark themes, dropped on light
-        # ones where it reads as a harsh black ring.
+        # ones where it reads as a harsh black ring. Inset 1px further than
+        # the body (9 vs 8) with a matching radius so the hairline sits fully
+        # inside the card edge; even dimensions keep the arcs left/right
+        # symmetric (see widgets.paint_pill).
         if self.palette().color(QPalette.Window).lightness() < 128:
             painter.setPen(QPen(QColor(80, 80, 80, 255), 1))
-            painter.drawRoundedRect(self.rect().adjusted(8, 8, -9, -9), 14, 14)
+            painter.drawRoundedRect(self.rect().adjusted(9, 9, -9, -9), 13, 13)
 
     def showEvent(self, event):
         FamilyWindowRegistry.refresh_hwnd(self)

@@ -407,7 +407,11 @@ class ClipboardPanel(QWidget):
         painter.setBrush(Qt.NoBrush)
         if self.palette().color(QPalette.Window).lightness() < 128:
             painter.setPen(QPen(QColor(80, 80, 80, 255), 1))
-            painter.drawRoundedRect(self.rect().adjusted(8, 8, -9, -9), 14, 14)
+            # Inset 1px further than the body (9 vs 8) and shrink the radius
+            # to match, so the hairline sits fully inside the card edge like
+            # the capsule's. Keeping both dimensions even avoids Qt's AA
+            # rendering the top-left arc flatter than the top-right one.
+            painter.drawRoundedRect(self.rect().adjusted(9, 9, -9, -9), 13, 13)
 
     def showEvent(self, event):
         # Apply WS_EX_NOACTIVATE once the HWND exists so mouse clicks on the

@@ -56,12 +56,12 @@ def system_color(role):
 
 
 def paint_pill(painter, rect, radius):
-    """Paint a toolbar pill: gradient body + hairline border + glass edge.
+    """Paint a toolbar pill: gradient body + hairline border.
 
     The body is a subtle top-to-bottom gradient derived from the system
-    window color (no fixed colors — Qt decides), the hairline is the
-    family's #505050 so every window of the app reads as one design, and a
-    faint white catch-light runs along the flat top edge on dark themes.
+    window color (no fixed colors — Qt decides), and the hairline is the
+    family's #505050 so every window of the app reads as one design. On
+    light themes the hairline is dropped — it reads as a harsh black ring.
     """
     painter.setRenderHint(QPainter.Antialiasing)
     bg = QApplication.palette().color(QPalette.Window)
@@ -75,18 +75,15 @@ def paint_pill(painter, rect, radius):
     painter.drawRoundedRect(rect, radius, radius)
 
     painter.setBrush(Qt.NoBrush)
-    # The #505050 hairline keeps the pill defined on dark themes; on a
-    # light background it reads as a harsh black ring, so it is dropped.
     if is_dark:
         painter.setPen(QPen(QColor(80, 80, 80, 255), 1))
-        painter.drawRoundedRect(rect.adjusted(0, 0, -1, -1), radius, radius)
-
-    # Soft catch-light across the flat top edge. Only drawn on dark themes —
-    # a white line is invisible on a light pill anyway.
-    if is_dark:
-        painter.setPen(QPen(QColor(255, 255, 255, 40), 1))
-        painter.drawLine(rect.x() + radius - 2, rect.y() + 1,
-                         rect.x() + rect.width() - radius + 2, rect.y() + 1)
+        # Crisp hairline sitting exactly on the pill's edge: inset the path
+        # by half the pen width in floating coords (and shrink the radius by
+        # the same) so the 1px line aligns to device pixels — left/right
+        # symmetric at any DPI scaling and never reads as a stray "line
+        # inside the top edge".
+        painter.drawRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5),
+                                radius - 0.5, radius - 0.5)
 
 
 def _blend(c1, c2, t):
