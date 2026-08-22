@@ -15,6 +15,7 @@ from modules.i18n import I18n
 from modules.family import FamilyWindowRegistry
 from modules.global_mouse_hook import GlobalMouseHook
 from modules.widgets import GlassIconButton, paint_pill
+from modules.config import Config
 
 # Windows constants
 WM_KEYDOWN = 0x0100
@@ -92,23 +93,35 @@ class CapsuleBar(QWidget):
         layout.setSpacing(10)
         layout.setContentsMargins(14, 6, 14, 6)
 
+        # The four tool buttons are built in the user-defined order (stored
+        # in config["tool_order"]); Settings and Close stay pinned at the end.
+        tool_specs = {
+            "screenshot": (ICON_SCREENSHOT, "screenshot"),
+            "annotation": (ICON_ANNOTATION, "annotation"),
+            "translate": (ICON_TRANSLATE, "translate"),
+            "clipboard": (ICON_CLIPBOARD, "clipboard"),
+        }
+        order = Config().get(
+            "tool_order", ["screenshot", "annotation", "translate", "clipboard"])
+
         # All capsule icons must keep their original colour on hover (task 1):
         # only the translucent plate animates, never a colour tint on the SVG.
-        self.btn_screenshot = GlassIconButton(
-            ICON_SCREENSHOT, I18n.tr("screenshot"), colorize_icon=False)
-        layout.addWidget(self.btn_screenshot)
-
-        self.btn_annotation = GlassIconButton(
-            ICON_ANNOTATION, I18n.tr("annotation"), colorize_icon=False)
-        layout.addWidget(self.btn_annotation)
-
-        self.btn_translate = GlassIconButton(
-            ICON_TRANSLATE, I18n.tr("translate"), colorize_icon=False)
-        layout.addWidget(self.btn_translate)
-
-        self.btn_clipboard = GlassIconButton(
-            ICON_CLIPBOARD, I18n.tr("clipboard"), colorize_icon=False)
-        layout.addWidget(self.btn_clipboard)
+        self._tool_buttons = {}
+        for key in order:
+            if key not in tool_specs:
+                continue
+            svg, tooltip_key = tool_specs[key]
+            btn = GlassIconButton(svg, I18n.tr(tooltip_key), colorize_icon=False)
+            self._tool_buttons[key] = btn
+            layout.addWidget(btn)
+        # Fallback: if a stale saved order misses a tool, append it so the
+        # capsule never loses a button.
+        for key, (svg, tooltip_key) in tool_specs.items():
+            if key in self._tool_buttons:
+                continue
+            btn = GlassIconButton(svg, I18n.tr(tooltip_key), colorize_icon=False)
+            self._tool_buttons[key] = btn
+            layout.addWidget(btn)
 
         self.btn_settings = GlassIconButton(
             ICON_SETTINGS, I18n.tr("settings"), colorize_icon=False)
@@ -121,6 +134,27 @@ class CapsuleBar(QWidget):
             colorize_icon=False
         )
         layout.addWidget(self.btn_close)
+
+        # Stable references used by CapRiseApp.connect_signals().
+        self.btn_screenshot = self._tool_buttons["screenshot"]
+        self.btn_annotation = self._tool_buttons["annotation"]
+        self.btn_translate = self._tool_buttons["translate"]
+        self.btn_clipboard = self._tool_buttons["clipboard"]
+
+    def reorder_tools(self, order):
+        """Reorder the tool buttons to match `order` (a list of tool keys).
+
+        The existing button objects are reused and only their position in the
+        layout changes, so the signal connections made in CapRiseApp stay
+        valid. Settings and Close always remain pinned at the end."""
+        layout = self.layout()
+        for btn in self._tool_buttons.values():
+            layout.removeWidget(btn)
+        anchor = self.btn_settings  # insert before Settings
+        for key in order:
+            btn = self._tool_buttons.get(key)
+            if btn is not None:
+                layout.insertWidget(layout.indexOf(anchor), btn)
 
     def setup_shadow(self):
         shadow = QGraphicsDropShadowEffect()

@@ -24,6 +24,8 @@ TRANSLATIONS = {
         "app_name": "CapRise",
         "language": "语言",
         "hotkey": "快捷键",
+        "tool_order": "图标顺序",
+        "tool_order_hint": "拖拽调整工具在胶囊中的排列顺序，拖拽后立即生效并保存。",
         "settings_title": "设置",
         "autostart": "开机自启",
         # Clipboard feature
@@ -103,6 +105,8 @@ TRANSLATIONS = {
         "app_name": "CapRise",
         "language": "Language",
         "hotkey": "Hotkey",
+        "tool_order": "Tool Order",
+        "tool_order_hint": "Drag to reorder the tools in the capsule. Takes effect and saves immediately.",
         "settings_title": "Settings",
         "autostart": "Auto-start",
         # Clipboard feature

@@ -166,7 +166,7 @@ class CapRiseApp:
         overlay.closed.connect(lambda o=overlay: self._on_overlay_closed(o))
 
     def _on_settings(self):
-        dialog = SettingsDialog()
+        dialog = SettingsDialog(capsule=self.capsule)
         dialog.exec()
 
     def _on_overlay_closed(self, overlay):
