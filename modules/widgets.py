@@ -166,7 +166,7 @@ class GlassIconButton(QPushButton):
     # base plate that must NOT react to hover — otherwise the hover animation
     # would wobble the "selected" indicator's opacity.
     ACTIVE_ALPHA = 150
-    HOVER_ALPHA = 46
+    HOVER_ALPHA = 82
 
     def _apply_visuals(self, value=None):
         """Recompute the current plate alpha + icon color from state, then
@@ -217,12 +217,29 @@ class GlassIconButton(QPushButton):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         rect = self.rect()
-        # Background plate (translucent accent) — only when lit.
-        if self._alpha > 0:
-            h = self._hover_bg
+        alpha = self._alpha
+        # Background plate: a translucent "glass chip" that fades in with the
+        # interaction intensity — a uniform pale-blue tint (frosted glass)
+        # plus a near-white hairline edge, so a hover reads as a small
+        # translucent pane instead of a flat tint.
+        if alpha > 0:
+            r = self._size // 3
+            # Theme-aware plate brightness: a dark pill can carry a slightly
+            # deeper tint, a light pill needs a brighter one to keep the
+            # glass readable against the light background.
+            dark = QApplication.palette().color(QPalette.Window).lightness() < 128
+            lift = 115 if dark else 145
+            plate = QColor(self._hover_bg).lighter(lift)
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(h.red(), h.green(), h.blue(), self._alpha))
-            p.drawRoundedRect(rect, self._size // 3, self._size // 3)
+            p.setBrush(QColor(plate.red(), plate.green(), plate.blue(), alpha))
+            p.drawRoundedRect(rect, r, r)
+            # Glass edge: thin near-white hairline on an even-sized inset so
+            # the border stays crisp and left/right symmetric at any DPI
+            # scaling (an odd inset flattens the left/top arcs).
+            p.setBrush(Qt.NoBrush)
+            edge = min(255, int(alpha * 0.35) + 10)
+            p.setPen(QPen(QColor(255, 255, 255, edge), 1))
+            p.drawRoundedRect(QRectF(rect).adjusted(1, 1, -1, -1), r - 1, r - 1)
         # Icon, centered via the DPR-aware cached pixmap (centre on its
         # LOGICAL size so a DPR-tagged pixmap isn't offset by the scale).
         pm = self._icon_pixmap(self._icon_color, self._icon_size)
