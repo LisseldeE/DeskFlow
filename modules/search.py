@@ -1,10 +1,10 @@
 """Global search window (spotlight-style).
 
 A floating search card with an input box, two scope toggles (全局文件 /
-安装软件) and a results card. The Everything(ET) file-search backend is NOT
-wired yet — the "全局文件" toggle is only a front-end placeholder; the card
-currently returns safe calculation results and matches against installed
-apps (read from the registry Uninstall keys in the background).
+安装软件) and a results card. Safe calculation results and matches against
+installed apps (read from the registry Uninstall keys in the background)
+are both inline; the "全局文件" scope is backed by the Everything (ET)
+software through its bundled es.exe command-line tool.
 
 The window is a "family window" (registered with FamilyWindowRegistry) so
 clicking inside it never collapses the family. ESC / outside-click / Enter
@@ -14,24 +14,33 @@ card also brings the capsule back.
 import ast
 import math
 import os
+import shutil
+import subprocess
+import sys
 import threading
+import time
 import winreg
+import zipfile
+from collections import deque
+from pathlib import Path
 
 from PySide6.QtCore import (
     Qt, Signal, QSize, QPoint, QPointF, QRectF, QPropertyAnimation,
-    QVariantAnimation, QEasingCurve, QTimer, QEvent, QFileInfo
+    QVariantAnimation, QEasingCurve, QTimer, QEvent, QFileInfo, QUrl
 )
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QPalette, QGuiApplication, QCursor, QKeyEvent, QIcon
+    QPainter, QColor, QPen, QPalette, QGuiApplication, QCursor, QKeyEvent,
+    QIcon, QDesktopServices
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QScrollArea,
-    QApplication, QAbstractButton, QFileIconProvider
+    QApplication, QAbstractButton, QFileIconProvider, QMessageBox
 )
 
-from modules.icons import ICON_SEARCH, ICON_APP, ICON_CALC
+from modules.icons import ICON_SEARCH, ICON_APP, ICON_CALC, ICON_FILE
 from modules.i18n import I18n
 from modules.family import FamilyWindowRegistry
+from modules.config import Config
 from modules.widgets import make_pixmap, system_color, screen_dpr
 
 
@@ -319,6 +328,153 @@ def _render_real_icon(icon, slot):
 
 
 # --------------------------------------------------------------------------
+# Everything (ET) file-search integration.
+#
+# CapRise drives Everything through its bundled command-line tool es.exe
+# (installed alongside Everything by default). Everything itself must be
+# running for es.exe to answer, so before each query the SearchWindow makes
+# sure the Everything.exe process is up (launched silently to the tray when
+# needed). The user-facing dependency flow (download / pick location) lives
+# in SearchWindow._ensure_et_ready.
+# --------------------------------------------------------------------------
+
+_CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+_ET_DOWNLOAD_URL = "https://www.voidtools.com/downloads/"
+
+
+def find_et_es():
+    """Path to es.exe in the project config dir (~/CapRise/everything), or
+    None. Only this dir is used: system-wide Everything installs and PATH
+    entries are deliberately ignored."""
+    es = os.path.join(_ET_RUN_DIR, "es.exe")
+    if os.path.isfile(es):
+        return es
+    return None
+
+
+def find_everything_exe():
+    """Path to Everything.exe in the project config dir, or None."""
+    run_exe = os.path.join(_ET_RUN_DIR, "Everything.exe")
+    if os.path.isfile(run_exe):
+        return run_exe
+    return None
+
+
+# --- Bundled Everything (portable Everything.exe + es.exe) ----------------
+#
+# CapRise ships an `everything.zip` next to the app so file search works out
+# of the box. Both files are MIT licensed and redistributable (with
+# attribution). File search ONLY reads ~/CapRise/everything: when the switch
+# is first turned on, the zip is extracted there (Everything keeps its index
+# next to its own exe, so it must never run from a temp extraction dir like
+# _MEIPASS); a copy the user placed there is used as-is.
+
+_ET_RUN_DIR = os.path.join(str(Path.home()), "CapRise", "everything")
+_ET_ZIP_NAME = "everything.zip"
+# Dedicated Everything instance name. Everything only answers es.exe from a
+# same-session instance, and a system-wide install running as a service
+# (Session 0) is invisible to es.exe — so CapRise always launches its own
+# portable instance under this name and es.exe always connects to it. A
+# distinct name also lets both coexist (Everything is single-instance per
+# name, not per machine).
+_ET_INSTANCE = "caprise"
+
+
+def _bundle_zip():
+    """Path of the bundled everything.zip, or None.
+
+    Covers dev (project_root/everything.zip), PyInstaller onefile
+    (sys._MEIPASS/everything.zip) and onedir (exe_dir/everything.zip)."""
+    candidates = []
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        candidates.append(os.path.join(sys._MEIPASS, _ET_ZIP_NAME))
+    candidates.append(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", _ET_ZIP_NAME))
+    candidates.append(os.path.join(
+        os.path.dirname(sys.executable), _ET_ZIP_NAME))
+    for cand in candidates:
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def _provision_bundled_et():
+    """Ensure ~/CapRise/everything has Everything.exe + es.exe.
+
+    On first use the bundled everything.zip is extracted there; afterwards
+    existing files are kept as-is (an already-present / older version is
+    enabled instead of being overwritten). Returns (Everything.exe, es.exe)
+    when ready, else (None, None)."""
+    dst_e = os.path.join(_ET_RUN_DIR, "Everything.exe")
+    dst_es = os.path.join(_ET_RUN_DIR, "es.exe")
+    if os.path.isfile(dst_e) and os.path.isfile(dst_es):
+        return dst_e, dst_es
+    zip_path = _bundle_zip()
+    if not zip_path:
+        return None, None
+    try:
+        os.makedirs(_ET_RUN_DIR, exist_ok=True)
+        with zipfile.ZipFile(zip_path) as zf:
+            for name in zf.namelist():
+                base = os.path.basename(name).lower()
+                if base not in ("everything.exe", "everything64.exe",
+                                "es.exe", "license.txt") \
+                        and not base.endswith(".lng"):
+                    continue
+                target = os.path.join(_ET_RUN_DIR, os.path.basename(name))
+                if os.path.isfile(target):
+                    continue
+                with zf.open(name) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+        if os.path.isfile(dst_e) and os.path.isfile(dst_es):
+            return dst_e, dst_es
+    except OSError:
+        pass
+    return None, None
+
+
+def _decode_es_output(data):
+    """Decode es.exe output.
+
+    The bundled es.exe (1.1.0.x) writes redirected output using the system
+    ANSI codepage (GBK on a zh-CN Windows) with no BOM — decoding it as
+    UTF-8 turns every Chinese path into mojibake. Newer builds may emit
+    UTF-16 / UTF-8, so try those first (BOM / null-byte heuristics), then
+    strict UTF-8, and only fall back to the system ANSI codec."""
+    if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
+        # The "utf-16" codec consumes the BOM it detects.
+        return data.decode("utf-16", errors="replace")
+    if b"\x00" in data:
+        return data.decode("utf-16-le", errors="replace")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        # `mbcs` is Python's name for the real Windows ANSI code page
+        # (GetACP): cp936/GBK on zh-CN, cp1252 on en-US — not the process
+        # locale, which is often UTF-8 regardless of system locale.
+        return data.decode("mbcs", errors="replace")
+
+
+def query_et_files(es_path, query, instance=_ET_INSTANCE):
+    """Run es.exe and return the full list of matching file paths.
+
+    Always targets the `caprise` Everything instance — a system-wide
+    Everything running as a service (Session 0) is invisible to es.exe, so
+    queries must go through the portable instance CapRise launches itself.
+    Returns a list of absolute paths (possibly empty). Raises OSError on a
+    failed invocation so the caller can surface a "search failed" row."""
+    cmd = [es_path, "-instance", instance, query]
+    proc = subprocess.run(
+        cmd, capture_output=True, creationflags=_CREATE_NO_WINDOW, timeout=20)
+    if proc.returncode != 0:
+        raise OSError(proc.stderr.decode(errors="replace").strip()
+                      or f"es.exe exited with code {proc.returncode}")
+    text = _decode_es_output(proc.stdout)
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+# --------------------------------------------------------------------------
 # Small UI widgets
 # --------------------------------------------------------------------------
 
@@ -353,6 +509,21 @@ class ToggleSwitch(QAbstractButton):
             super().setChecked(checked)
             return
         super().setChecked(checked)
+        self._animate_to(checked)
+
+    def nextCheckState(self):
+        """Keep the knob in sync when QAbstractButton toggles the state on a
+        real mouse click.
+
+        QAbstractButton flips the check state through the internal C++
+        nextCheckState() on mouse release, which BYPASSES the Python
+        setChecked() override — so without this the state would change but
+        _t (the knob animation) would never move, making the switch look
+        completely unresponsive to clicks."""
+        super().nextCheckState()
+        self._animate_to(self.isChecked())
+
+    def _animate_to(self, checked):
         self._anim.stop()
         self._anim.setStartValue(self._t)
         self._anim.setEndValue(1.0 if checked else 0.0)
@@ -496,9 +667,21 @@ class SearchWindow(QWidget):
     """
 
     closed = Signal()
+    # 2nd arg: list of matching file paths (success) or None (search failed).
+    file_results_ready = Signal(int, object)
 
     WIDTH = 520
     MAX_RESULTS_H = 300
+    # Result rows are rendered in small batches on a timer so a huge result
+    # set (hundreds of apps / thousands of files) never freezes the UI
+    # thread. Each batch also only extracts that many system icons, so a
+    # tick stays cheap even while the shell is queried.
+    RENDER_BATCH = 30
+    RENDER_INTERVAL = 25
+    # Debounce: typing only re-arms a short single-shot timer; the actual
+    # rebuild (re-filter + re-render + new es.exe query) fires once input
+    # pauses, so fast typing doesn't spam refreshes or spawn a query per key.
+    DEBOUNCE_MS = 300
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -513,6 +696,32 @@ class SearchWindow(QWidget):
         self._selected = -1
         self._nav = []          # list of (ResultRow, payload)
         self._closed_emitted = False
+        # Chunked result rendering: queued ("app", app) / ("file", path)
+        # entries are drained RENDER_BATCH at a time on a timer so a huge
+        # match set can't block the UI thread. Sections and status/loading
+        # rows are added immediately (they're cheap).
+        self._render_timer = QTimer(self)
+        self._render_timer.setInterval(self.RENDER_INTERVAL)
+        self._render_timer.timeout.connect(self._render_batch)
+        self._pending_rows = deque()
+        # Debounce timer for the input box (see DEBOUNCE_MS).
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(self.DEBOUNCE_MS)
+        self._debounce.timeout.connect(self._rebuild_results)
+        # Per-section row counters: async-drained rows are inserted right
+        # after their own section header (see _append_row) so app rows can
+        # never fall under the file header that was laid out before them.
+        self._section_rows = {}
+        # Everything(ET) file-search session state. _et_es is the es.exe path
+        # once detection/manual selection succeeds (None = not ready); the
+        # async query posts results back via file_results_ready, and stale
+        # queries are dropped by comparing against _file_query_gen.
+        self._et_es = None
+        self._et_exe = None
+        self._file_query_gen = 0
+        self._file_loading_row = None
+        self._file_section_lbl = None
 
         self._build_ui()
         self._init_anim()
@@ -582,7 +791,15 @@ class SearchWindow(QWidget):
         toggles.setContentsMargins(4, 10, 4, 6)
         toggles.setSpacing(18)
         self.switch_files = ToggleSwitch(I18n.tr("search_global_files"))
-        self.switch_files.setChecked(False)
+        # Restore the persisted file-search switch (default off). Only
+        # re-enable when Everything is already provisioned; otherwise keep
+        # it off — the dependency prompt shows the next time the user turns
+        # the switch on (no silent half-enabled state, no startup dialog).
+        if Config().get("search_files_enabled", False) \
+                and find_et_es() and find_everything_exe():
+            self.switch_files.setChecked(True)
+        else:
+            self.switch_files.setChecked(False)
         self.switch_apps = ToggleSwitch(I18n.tr("search_installed_apps"))
         self.switch_apps.setChecked(True)
         toggles.addWidget(self.switch_files)
@@ -591,10 +808,12 @@ class SearchWindow(QWidget):
         root.addLayout(toggles)
 
         # --- separator ---
-        sep = QLabel()
-        sep.setFixedHeight(1)
-        sep.setStyleSheet("background: rgba(128,128,128,60);")
-        root.addWidget(sep)
+        # Hidden together with the results area so it never draws as a
+        # stray short line under the input box when there is no content.
+        self._sep = QLabel()
+        self._sep.setFixedHeight(1)
+        self._sep.setStyleSheet("background: rgba(128,128,128,60);")
+        root.addWidget(self._sep)
 
         # --- results area ---
         self.scroll = QScrollArea()
@@ -627,8 +846,19 @@ class SearchWindow(QWidget):
         # --- wiring ---
         self.search_input.textChanged.connect(self._on_text_changed)
         self.search_input.installEventFilter(self)
-        self.switch_files.toggled.connect(self._on_scope_changed)
+        self.switch_files.toggled.connect(self._on_files_toggle)
         self.switch_apps.toggled.connect(self._on_scope_changed)
+        # Results from the ET worker thread arrive here (queued connection).
+        self.file_results_ready.connect(self._on_file_results_ready)
+
+        # If the persisted file-search switch was restored ON, provision the
+        # ET backend now. The setChecked(True) above ran before the toggled
+        # signal was connected, so _on_files_toggle / _ensure_et_ready never
+        # fired and self._et_es is still None — without this, restarting with
+        # the switch enabled would leave file search silently non-functional.
+        # ET is guaranteed present by the restore condition, so no dialog.
+        if self.switch_files.isChecked():
+            self._ensure_et_ready()
 
         # Collapse the results area to the compact 110px card on first show.
         # Without this the scroll area is visible at its default minimum
@@ -789,6 +1019,9 @@ class SearchWindow(QWidget):
             return
         self._closed_emitted = True
         self._closing = False
+        self._debounce.stop()
+        self._render_timer.stop()
+        self._pending_rows.clear()
         FamilyWindowRegistry.remove(self)
         self.closed.emit()
         self.deleteLater()
@@ -827,7 +1060,14 @@ class SearchWindow(QWidget):
 
     def _on_text_changed(self, text):
         self._selected = -1
-        self._rebuild_results()
+        if not text.strip():
+            # Empty input collapses immediately — no need to wait out the
+            # debounce just to hide an already-empty results card.
+            self._debounce.stop()
+            self._rebuild_results()
+        else:
+            # Re-arm the debounce: the rebuild runs once typing pauses.
+            self._debounce.start()
 
     def _on_scope_changed(self, _=None):
         self._rebuild_results()
@@ -837,13 +1077,187 @@ class SearchWindow(QWidget):
             self._index_poll.stop()
             self._rebuild_results()
 
+    # ----------------------------------------------------- Everything (ET)
+
+    def _on_files_toggle(self, checked):
+        """Enable/disable the Everything-backed file search.
+
+        Turning the toggle ON checks once whether Everything is installed;
+        if not, a friendly dialog explains the dependency and offers to
+        download it or let the user point at an existing install. A
+        cancelled / unresolved dependency keeps the feature OFF (the toggle
+        is un-checked) so no silent half-enabled state lingers."""
+        if checked and not self._ensure_et_ready():
+            self.switch_files.blockSignals(True)
+            self.switch_files.setChecked(False)
+            self.switch_files.blockSignals(False)
+        # Persist the switch so it survives restarts (default off).
+        Config().set("search_files_enabled", self.switch_files.isChecked())
+        self._rebuild_results()
+
+    def _ensure_et_ready(self):
+        """Return True when Everything.exe + es.exe are usable.
+
+        Resolution order:
+        1. files already present in ~/CapRise/everything (user-placed or
+           previously extracted);
+        2. the bundled everything.zip, extracted to ~/CapRise/everything on
+           first use (existing / older copies are kept);
+        3. friendly download dialog pointing at the config dir.
+        """
+        if self._et_es:
+            return True
+        es = find_et_es()
+        if es:
+            everything = find_everything_exe()
+            if everything:
+                self._et_es = es
+                self._et_exe = everything
+                return True
+        # Config dir empty: pull Everything + es.exe from the bundled zip.
+        everything, es = _provision_bundled_et()
+        if everything and es:
+            self._et_es = es
+            self._et_exe = everything
+            return True
+        return self._prompt_et_missing()
+
+    def _prompt_et_missing(self):
+        """Dialog when file search can't start: the config dir has no
+        Everything. Offers the official download / skip for now."""
+        box = QMessageBox(self)
+        box.setWindowTitle(I18n.tr("search_et_title"))
+        box.setIcon(QMessageBox.Warning)
+        box.setText(I18n.tr("search_et_msg") + "\n\n" + _ET_RUN_DIR)
+        btn_download = box.addButton(
+            I18n.tr("search_et_download"), QMessageBox.AcceptRole)
+        box.addButton(I18n.tr("search_et_later"), QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is btn_download:
+            QDesktopServices.openUrl(QUrl(_ET_DOWNLOAD_URL))
+        return False
+
+    def _ensure_et_running(self):
+        """Make sure the `caprise` Everything instance is running.
+
+        Runs on the worker thread (pure subprocess, no Qt). A `tasklist` hit
+        on "Everything.exe" is NOT enough: a system-wide Everything running
+        as a service (Session 0) can't answer es.exe, so we probe the named
+        instance directly and, when missing, launch the bundled portable
+        Everything with a dedicated instance name (which coexists with any
+        system install). Returns True when the instance was already up — a
+        freshly launched instance needs a short grace period before es.exe
+        can answer."""
+        exe = self._et_exe
+        es = self._et_es
+        if not exe or not es:
+            return True
+        if self._et_instance_up(es):
+            return True
+        try:
+            subprocess.Popen(
+                [exe, "-instance", _ET_INSTANCE, "-startup"],
+                creationflags=_CREATE_NO_WINDOW)
+        except Exception:
+            pass
+        return False
+
+    def _et_instance_up(self, es):
+        """True when the `caprise` Everything instance is reachable via es.exe."""
+        try:
+            proc = subprocess.run(
+                [es, "-instance", _ET_INSTANCE, "-get-window-handle"],
+                capture_output=True, creationflags=_CREATE_NO_WINDOW, timeout=5)
+            return proc.returncode == 0
+        except Exception:
+            return False
+
+    def _run_file_query(self, text, gen):
+        """Background worker: query es.exe and post the paths back.
+
+        The result is matched against `gen` in _on_file_results_ready so a
+        stale (superseded) query never overwrites newer results."""
+        was_running = self._ensure_et_running()
+        paths = None
+        for attempt in range(1 if was_running else 3):
+            try:
+                paths = query_et_files(self._et_es, text, _ET_INSTANCE)
+                break
+            except Exception:
+                paths = None
+                if attempt < 2:
+                    # A freshly launched instance needs a moment for its IPC
+                    # to come up before es.exe can connect.
+                    time.sleep(2.0 if not was_running else 1.0)
+        try:
+            self.file_results_ready.emit(gen, paths)
+        except RuntimeError:
+            pass  # the search card closed before the query finished
+
+    def _on_file_results_ready(self, gen, paths):
+        """File query finished (queued from the worker thread)."""
+        if gen != self._file_query_gen:
+            return  # superseded by a newer query
+        if self._file_loading_row is not None:
+            self.results_layout.removeWidget(self._file_loading_row)
+            self._file_loading_row.deleteLater()
+            self._file_loading_row = None
+        if paths is None:
+            self._add_status_row(I18n.tr("search_et_failed"))
+        else:
+            for path in paths:
+                self._pending_rows.append(("file", path))
+            if not paths and self._file_section_lbl is not None:
+                # No matches -> drop the empty section header too.
+                self.results_layout.removeWidget(self._file_section_lbl)
+                self._file_section_lbl.deleteLater()
+                self._file_section_lbl = None
+            if self._pending_rows:
+                self._render_timer.start()
+        self._set_results_visible(self.results_layout.count() > 1 or
+                                  bool(self._pending_rows))
+
+    def _add_file_row(self, path):
+        name = os.path.basename(path.rstrip("\\/")) or path
+        parent = os.path.dirname(path.rstrip("\\/"))
+        icon = _get_file_icon(path) or ICON_FILE
+        row = ResultRow(icon, name, parent or path)
+        self._append_row(row, {"kind": "file", "path": path},
+                         tooltip=I18n.tr("search_file_open_tip"),
+                         section=self._file_section_lbl)
+
+    def _add_file_loading_row(self):
+        return self._add_status_row(I18n.tr("search_et_searching"))
+
+    def _add_status_row(self, text):
+        lbl = QLabel(text)
+        lbl.setFixedHeight(36)
+        lbl.setStyleSheet(
+            "color: palette(placeholder-text); background: transparent;"
+            " border: none; padding: 0 10px; font-size: 12px;")
+        self.results_layout.insertWidget(self.results_layout.count() - 1, lbl)
+        return lbl
+
     def _rebuild_results(self):
+        # Any rebuild supersedes a pending debounce (e.g. a scope toggle).
+        self._debounce.stop()
+        self._render_timer.stop()
+        self._pending_rows.clear()
+        # Invalidate any in-flight file query: stale results must never
+        # repopulate a rebuilt list (e.g. after the file switch is toggled
+        # off mid-search). A fresh query below re-reads the bumped gen.
+        self._file_query_gen += 1
+        # Fresh per-section row counters / header refs for this rebuild.
+        self._section_rows = {}
+        self._apps_section_lbl = None
         while self.results_layout.count() > 1:
             item = self.results_layout.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.deleteLater()
         self._nav = []
+        self._file_loading_row = None
+        self._file_section_lbl = None
 
         text = self.search_input.text().strip()
         if not text:
@@ -856,7 +1270,10 @@ class SearchWindow(QWidget):
             self._add_section(I18n.tr("search_category_calc"))
             self._add_calc_row(text, value)
 
-        # 2) Installed apps (gated by the 安装软件 toggle).
+        # 2) Installed apps (gated by the 安装软件 toggle). Matching rows are
+        #    queued and drained RENDER_BATCH at a time on a timer, so a big
+        #    match set can't freeze the card. Every match is shown — never
+        #    truncated, it just scrolls.
         if self.switch_apps.isChecked():
             apps = get_indexed_apps()
             if apps is None:
@@ -864,23 +1281,60 @@ class SearchWindow(QWidget):
                 self._add_loading_row()
             else:
                 matches = [a for a in apps
-                           if text.lower() in a["name"].lower()][:20]
+                           if text.lower() in a["name"].lower()]
                 if matches:
-                    self._add_section(I18n.tr("search_category_apps"))
+                    self._apps_section_lbl = self._add_section(
+                        I18n.tr("search_category_apps"))
                     for app in matches:
-                        self._add_app_row(app)
+                        self._pending_rows.append(("app", app))
 
-        # 3) Global files — Everything(ET) backend is NOT wired yet; only the
-        #    front-end toggle exists, so no file section is populated.
+        # 3) Global files — Everything(ET) backend, queried on a background
+        #    thread so typing stays responsive. The loading row shows until
+        #    es.exe answers; the section is populated in
+        #    _on_file_results_ready (stale queries are dropped by gen).
+        if self.switch_files.isChecked() and self._et_es:
+            self._file_section_lbl = self._add_section(
+                I18n.tr("search_category_files"))
+            self._file_loading_row = self._add_file_loading_row()
+            gen = self._file_query_gen
+            threading.Thread(
+                target=self._run_file_query, args=(text, gen),
+                name="caprise-et-search", daemon=True).start()
 
-        has_widgets = self.results_layout.count() > 1
-        self._set_results_visible(has_widgets)
-        if self._nav:
+        if self._pending_rows:
+            self._set_results_visible(True)
+            self._render_timer.start()
+        elif self.results_layout.count() > 1:
+            self._set_results_visible(True)
+        else:
+            self._set_results_visible(False)
+
+    def _render_batch(self):
+        """Drain queued result rows in small batches (timer callback).
+
+        Yields the event loop between batches, so typing / closing / the
+        global mouse hook keep working even while hundreds of rows are
+        still being added. The first row is auto-selected as soon as the
+        first entries land."""
+        made = 0
+        while made < self.RENDER_BATCH and self._pending_rows:
+            kind, data = self._pending_rows.popleft()
+            if kind == "app":
+                self._add_app_row(data)
+            else:
+                self._add_file_row(data)
+            made += 1
+        self._update_results_height()
+        if not self._pending_rows:
+            self._render_timer.stop()
+        if self._selected < 0 and self._nav:
             self._select(0)
 
     def _add_section(self, text):
+        label = SectionLabel(text)
         self.results_layout.insertWidget(
-            self.results_layout.count() - 1, SectionLabel(text))
+            self.results_layout.count() - 1, label)
+        return label
 
     def _add_calc_row(self, expr, value):
         result = format_number(value)
@@ -898,7 +1352,8 @@ class SearchWindow(QWidget):
         row = ResultRow(icon, app["name"], subtitle)
         path = launch or (app.get("location") or "")
         self._append_row(row, {"kind": "app", "path": path},
-                         tooltip=I18n.tr("search_app_open_tip"))
+                         tooltip=I18n.tr("search_app_open_tip"),
+                         section=self._apps_section_lbl)
 
     def _add_loading_row(self):
         lbl = QLabel(I18n.tr("search_indexing"))
@@ -908,39 +1363,68 @@ class SearchWindow(QWidget):
             " border: none; padding: 0 10px; font-size: 12px;")
         self.results_layout.insertWidget(self.results_layout.count() - 1, lbl)
 
-    def _append_row(self, row, payload, tooltip=""):
+    def _append_row(self, row, payload, tooltip="", section=None):
+        """Insert `row` into the results list.
+
+        Rows drain asynchronously from _pending_rows while section headers
+        are laid out synchronously inside _rebuild_results, so inserting
+        every row at the end (count()-1) would drop later-added sections'
+        rows under the wrong header — e.g. app rows appearing below the
+        file header that was already created. Rows therefore go immediately
+        after their own section header, using a per-section counter to keep
+        them in order; without a section they fall back to the end.
+        """
         if tooltip:
             row.setToolTip(tooltip)
         row.clicked.connect(self._on_row_clicked)
-        self.results_layout.insertWidget(self.results_layout.count() - 1, row)
+        if section is not None:
+            idx = self.results_layout.indexOf(section)
+            if idx >= 0:
+                n = self._section_rows.get(id(section), 0)
+                self.results_layout.insertWidget(idx + 1 + n, row)
+                self._section_rows[id(section)] = n + 1
+            else:
+                self.results_layout.insertWidget(
+                    self.results_layout.count() - 1, row)
+        else:
+            self.results_layout.insertWidget(self.results_layout.count() - 1, row)
         self._nav.append((row, payload))
 
     def _set_results_visible(self, visible):
         self.scroll.setVisible(visible)
+        # The separator belongs to the results area: hide it together so it
+        # doesn't linger as a lone short line under the input when empty.
+        self._sep.setVisible(visible)
         if visible:
-            content = self._results_content_h()
-            scroll_h = max(0, min(content, self.MAX_RESULTS_H))
-            self.scroll.setFixedHeight(scroll_h)
-            total = 12 + 40 + (10 + 24 + 6) + 1 + scroll_h + 12
+            self._update_results_height()
         else:
             self.scroll.setFixedHeight(0)
-            total = 110
+            self.setFixedHeight(110)
+
+    def _update_results_height(self):
+        """Refit the scroll area (and the card) to the current content."""
+        content = self._results_content_h()
+        scroll_h = max(0, min(content, self.MAX_RESULTS_H))
+        self.scroll.setFixedHeight(scroll_h)
+        total = 12 + 40 + (10 + 24 + 6) + 1 + scroll_h + 12
         self.setFixedHeight(max(110, total))
 
     def _results_content_h(self):
-        widgets = []
+        """Total content height, with an early-out once it passes
+        MAX_RESULTS_H — the scroll view clamps there anyway, so this stays
+        O(visible rows) instead of O(all rows) on huge result sets."""
+        spacing = self.results_layout.spacing()
+        h = 0
         for i in range(self.results_layout.count()):
             w = self.results_layout.itemAt(i).widget()
-            if w is not None:
-                widgets.append(w)
-        if not widgets:
-            return 0
-        h = sum(w.height() if w.height() > 0 else w.sizeHint().height()
-                for w in widgets)
-        h += (len(widgets) - 1) * self.results_layout.spacing()
+            if w is None:
+                continue
+            h += w.height() if w.height() > 0 else w.sizeHint().height()
+            if h >= self.MAX_RESULTS_H:
+                return self.MAX_RESULTS_H
+            h += spacing
         m = self.results_layout.contentsMargins()
-        h += m.top() + m.bottom()
-        return h
+        return h + m.top() + m.bottom()
 
     # --------------------------------------------------------- navigation
 
@@ -1007,7 +1491,7 @@ class SearchWindow(QWidget):
         if kind == "calc":
             QApplication.clipboard().setText(payload.get("text", ""))
             self.close_search()
-        elif kind == "app":
+        elif kind in ("app", "file"):
             path = payload.get("path", "")
             if path:
                 try:

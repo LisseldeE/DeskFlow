@@ -5,8 +5,10 @@ __pycache__/
 output/
 dist/
 test/
+everything/
 
 *.exe
 *.bat
+*.zip
 
 1.txt
